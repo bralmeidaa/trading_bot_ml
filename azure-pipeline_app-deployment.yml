@@ -14,11 +14,18 @@ steps:
 - script: |
     echo "Tentando parar o processo com PID: $(AppPID)"
     # Verifica se a variável AppPID não está vazia antes de tentar parar
-    if [ -n "$(AppPID)" ]; then
-      kill $(AppPID)
-      echo "Comando 'kill' enviado para o PID $(AppPID)."
+    if [ -n "$(App_PID)" ]; then
+      # Agora, verifica se o processo com esse PID está realmente rodando
+      # O '2>/dev/null' suprime a mensagem de erro "No such process" se o PID não existir
+      if kill -0 $(App_PID) 2>/dev/null; then
+        echo "Processo com PID $(App_PID) está rodando. Enviando comando 'kill'..."
+        kill $(App_PID)
+        echo "Comando 'kill' enviado com sucesso."
+      else
+        echo "A variável de PID $(App_PID) foi encontrada, mas o processo não está mais rodando."
+      fi
     else
-      echo "Nenhum PID encontrado para parar."
+      echo "Nenhuma variável de PID foi definida. Nada a fazer."
     fi
   displayName: 'Parar Backend'
   # Condição 'always()' garante que esta tarefa sempre será executada,
@@ -48,12 +55,6 @@ steps:
     pip install -r requirements.txt
   displayName: 'Instalar dependências Python'
 
-# 3. Configurar variáveis de ambiente (sem alterações)
-- script: |
-    echo "##vso[task.setvariable variable=BINANCE_API_KEY]$(BINANCE_API_KEY)"
-    echo "##vso[task.setvariable variable=BINANCE_API_SECRET]$(BINANCE_API_SECRET)"
-  displayName: 'Configurar variáveis de ambiente'
-
 # 4. Iniciar Backend EM BACKGROUND (MODIFICADO)
 - script: |
     cd $(APP_DIR)
@@ -66,10 +67,10 @@ steps:
     # Captura o PID do último processo em background
     APP_PID=$!
     
-    echo "Aplicação iniciada com PID: $APP_PID"
+    echo "Aplicação iniciada com PID $APP_PID"
     
     # Salva o PID em uma variável de pipeline para ser usada em outras tarefas
-    echo "##vso[task.setvariable variable=AppPID]$APP_PID"
+    export App_PID=$APP_PID
   displayName: 'Iniciar Backend em Background'
 
 # 5. (OPCIONAL, MAS RECOMENDADO) Verificar se a App está no ar
