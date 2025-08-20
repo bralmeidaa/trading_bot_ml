@@ -2,7 +2,7 @@ trigger:
   - main
 
 pool:
-  MyOwnAgentPool
+  name: MyOwnAgentPool
 
 variables:
   PYTHON_VERSION: '3.13'
