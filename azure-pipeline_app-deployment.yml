@@ -9,37 +9,6 @@ variables:
   APP_PATTERN: "uvicorn backend.main:app"
 
 steps:
-# 0. Parar Aplicação (se já estiver rodando)
-- task: Bash@3
-  displayName: 'Garantir que a Aplicação não esteja rodando'
-  # 'always()' garante que esta limpeza sempre aconteça
-  condition: always()
-  inputs:
-    targetType: 'inline'
-    script: |
-      echo "Procurando por processos existentes que correspondam a: '$(APP_PATTERN)'"
-      APP_PID=$(pgrep -f "$(APP_PATTERN)")
-
-      if [ -n "$APP_PID" ]; then
-        echo "Processo(s) encontrado(s) com PID(s): $APP_PID"
-        echo "Enviando comando 'kill' para encerrar..."
-        kill $APP_PID
-        
-        # Espera 2 segundos para o processo terminar de forma limpa
-        sleep 2
-        
-        # Verifica se o processo realmente terminou
-        if kill -0 $APP_PID 2>/dev/null; then
-          echo "Processo não encerrou. Forçando com 'kill -9'..."
-          kill -9 $APP_PID
-          echo "Processo(s) encerrado(s) à força."
-        else
-          echo "Processo(s) encerrado(s) com sucesso."
-        fi
-      else
-        echo "Nenhum processo correspondente encontrado. O ambiente está limpo."
-      fi
-
 # 1. Copiar Conteúdo da App (sem alterações)
 - task: CopyFiles@2
   displayName: 'Copiar arquivos da aplicação'
@@ -64,33 +33,22 @@ steps:
 
 # 4. Iniciar Backend EM BACKGROUND (MODIFICADO)
 - script: |
-    cd $(APP_DIR)
-    source .venv/bin/activate
+    echo "Deploy concluído. Reiniciando o serviço 'tbm-app' via systemd..."
+    sudo systemctl restart tbm-app.service
     
-    echo "Iniciando Uvicorn em background..."
-    # Cria o diretório de logs, se ele não existir
-    mkdir -p logs
-
-    # Gera o timestamp com Ano-Mês-Dia
-    TIMESTAMP=$(date +%Y-%m-%d-%H-%M-%S)
-    LOG_FILE="logs/app-${TIMESTAMP}.log"
-
-    # Inicia o servidor e redireciona o log para um arquivo com a data
-    nohup python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 > "${LOG_FILE}" 2>&1 &
-
-    # Captura o PID do último processo em background
-    APP_PID=$!
-    
-    echo "Aplicação iniciada com PID $APP_PID"
-  displayName: 'Iniciar Backend em Background'
+    echo "Serviço reiniciado."
+  displayName: 'Reiniciar o Serviço da Aplicação'
 
 # 5. (OPCIONAL, MAS RECOMENDADO) Verificar se a App está no ar
 - script: |
-    echo "Aguardando a aplicação iniciar..."
-    sleep 10 # Dá um tempo para o servidor subir
+    echo "Aguardando o serviço reiniciar..."
+    sleep 10
     
-    # Tenta acessar um endpoint para confirmar que está funcionando
+    # Verifica o status do serviço
+    sudo systemctl is-active --quiet tbm-app.service || (echo "O serviço tbm-app não está ativo!" && exit 1)
+
+    # Tenta acessar o endpoint
     curl --fail http://localhost:8000/health || (echo "A aplicação não respondeu." && exit 1)
     
-    echo "Aplicação respondendo com sucesso!"
-  displayName: 'Verificar se a Aplicação está Rodando'
+    echo "Serviço e aplicação respondendo com sucesso!"
+  displayName: 'Verificar se o Serviço está Rodando'
