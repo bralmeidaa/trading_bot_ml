@@ -13,7 +13,8 @@ steps:
   inputs:
     SourceFolder: '$(System.DefaultWorkingDirectory)'
     Contents: '**'
-    TargetFolder: $(APP_DIR)
+    TargetFolder: '$(APP_DIR)'
+    OverWrite: true
     ignoreMakeDirErrors: true
 
 # 2. Install dependencies
