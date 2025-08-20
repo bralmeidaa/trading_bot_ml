@@ -61,8 +61,14 @@ steps:
     source .venv/bin/activate
     
     echo "Iniciando Uvicorn em background..."
-    # Inicia o servidor, redireciona a saída para um log e usa '&' para rodar em background
-    python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 > app.log 2>&1 &
+    # Cria o diretório de logs, se ele não existir
+    mkdir -p logs
+
+    # Gera o timestamp com Ano-Mês-Dia
+    TIMESTAMP=$(date +%Y-%m-%d)
+
+    # Inicia o servidor e redireciona o log para um arquivo com a data
+    python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 > "logs/app-${TIMESTAMP}.log" 2>&1 &
     
     # Captura o PID do último processo em background
     APP_PID=$!
