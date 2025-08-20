@@ -1,15 +1,34 @@
 trigger:
-  - main
+- main
 
 pool:
   name: MyOwnAgentPool
 
 variables:
   APP_DIR: /home/bralmeidaa/tbm/
+  # Variável para armazenar o PID da aplicação entre as tarefas
+  AppPID: '' 
 
 steps:
-# 1. Copy App Contents
+# 0. Parar a Aplicação (NOVA TAREFA)
+- script: |
+    echo "Tentando parar o processo com PID: $(AppPID)"
+    # Verifica se a variável AppPID não está vazia antes de tentar parar
+    if [ -n "$(AppPID)" ]; then
+      kill $(AppPID)
+      echo "Comando 'kill' enviado para o PID $(AppPID)."
+    else
+      echo "Nenhum PID encontrado para parar."
+    fi
+  displayName: 'Parar Backend'
+  # Condição 'always()' garante que esta tarefa sempre será executada,
+  # mesmo que as tarefas anteriores (como os testes) falhem.
+  # Isso evita deixar processos zumbis no seu agente.
+  condition: always()
+
+# 1. Copiar Conteúdo da App (sem alterações)
 - task: CopyFiles@2
+  displayName: 'Copiar arquivos da aplicação'
   inputs:
     SourceFolder: '$(System.DefaultWorkingDirectory)'
     Contents: |
@@ -20,29 +39,50 @@ steps:
     OverWrite: true
     ignoreMakeDirErrors: true
 
-# 2. Install dependencies
+# 2. Instalar dependências (sem alterações)
 - script: |
     cd $(APP_DIR)
-
     python3 -m venv .venv
-
     source .venv/bin/activate
-    
     python -m pip install --upgrade pip
     pip install -r requirements.txt
   displayName: 'Instalar dependências Python'
 
-# 3. Set Env. Variables
+# 3. Configurar variáveis de ambiente (sem alterações)
 - script: |
     echo "##vso[task.setvariable variable=BINANCE_API_KEY]$(BINANCE_API_KEY)"
     echo "##vso[task.setvariable variable=BINANCE_API_SECRET]$(BINANCE_API_SECRET)"
   displayName: 'Configurar variáveis de ambiente'
 
-# 4. Run App (Flask/FastAPI)
+# 4. Iniciar Backend EM BACKGROUND (MODIFICADO)
 - script: |
     cd $(APP_DIR)
-    
     source .venv/bin/activate
+    
+    echo "Iniciando Uvicorn em background..."
+    # Inicia o servidor, redireciona a saída para um log e usa '&' para rodar em background
+    python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 > app.log 2>&1 &
+    
+    # Captura o PID do último processo em background
+    APP_PID=$!
+    
+    echo "Aplicação iniciada com PID: $APP_PID"
+    
+    # Salva o PID em uma variável de pipeline para ser usada em outras tarefas
+    echo "##vso[task.setvariable variable=AppPID]$APP_PID"
+  displayName: 'Iniciar Backend em Background'
 
-    python3 -m uvicorn backend.main:app --reload --reload-dir backend --host 0.0.0.0 --port 8000 --log-level debug
-  displayName: 'Iniciar Backend'
+# 5. (OPCIONAL, MAS RECOMENDADO) Verificar se a App está no ar
+- script: |
+    echo "Aguardando a aplicação iniciar..."
+    sleep 10 # Dá um tempo para o servidor subir
+    
+    # Tenta acessar um endpoint (ex: a raiz '/') para confirmar que está funcionando
+    curl --fail http://localhost:8000/status || (echo "A aplicação não respondeu." && exit 1)
+    
+    echo "Aplicação respondendo com sucesso!"
+  displayName: 'Verificar se a Aplicação está Rodando'
+
+# AQUI VOCÊ PODE ADICIONAR SUAS TAREFAS DE TESTE
+# Ex: Rodar testes de integração, chamadas de API com Newman/Postman, etc.
+# - task: ...
