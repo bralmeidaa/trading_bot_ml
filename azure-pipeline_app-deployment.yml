@@ -77,12 +77,8 @@ steps:
     echo "Aguardando a aplicação iniciar..."
     sleep 10 # Dá um tempo para o servidor subir
     
-    # Tenta acessar um endpoint (ex: a raiz '/') para confirmar que está funcionando
-    curl --fail http://localhost:8000/status || (echo "A aplicação não respondeu." && exit 1)
+    # Tenta acessar um endpoint para confirmar que está funcionando
+    curl --fail http://localhost:8000/health || (echo "A aplicação não respondeu." && exit 1)
     
     echo "Aplicação respondendo com sucesso!"
   displayName: 'Verificar se a Aplicação está Rodando'
-
-# AQUI VOCÊ PODE ADICIONAR SUAS TAREFAS DE TESTE
-# Ex: Rodar testes de integração, chamadas de API com Newman/Postman, etc.
-# - task: ...
