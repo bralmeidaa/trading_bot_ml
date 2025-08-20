@@ -14,15 +14,15 @@ steps:
 - script: |
     echo "Tentando parar o processo com PID: $(AppPID)"
     # Verifica se a variável AppPID não está vazia antes de tentar parar
-    if [ -n "$App_PID" ]; then
+    if [ -n "$(AppSvcPid)" ]; then
       # Agora, verifica se o processo com esse PID está realmente rodando
       # O '2>/dev/null' suprime a mensagem de erro "No such process" se o PID não existir
-      if kill -0 $App_PID 2>/dev/null; then
-        echo "Processo com PID $App_PID está rodando. Enviando comando 'kill'..."
-        kill $App_PID
+      if kill -0 $(AppSvcPid) 2>/dev/null; then
+        echo "Processo com PID $(AppSvcPid) está rodando. Enviando comando 'kill'..."
+        kill $(AppSvcPid)
         echo "Comando 'kill' enviado com sucesso."
       else
-        echo "A variável de PID $App_PID foi encontrada, mas o processo não está mais rodando."
+        echo "A variável de PID $(AppSvcPid) foi encontrada, mas o processo não está mais rodando."
       fi
     else
       echo "Nenhuma variável de PID foi definida. Nada a fazer."
@@ -70,7 +70,9 @@ steps:
     echo "Aplicação iniciada com PID $APP_PID"
     
     # Salva o PID em uma variável de pipeline para ser usada em outras tarefas
-    export App_PID=$APP_PID
+    echo "##vso[task.setvariable variable=AppSvcPid]$APP_PID"
+
+    echo "O PID $(AppSvcPid) foi definido como Variavel de Ambiente."
   displayName: 'Iniciar Backend em Background'
 
 # 5. (OPCIONAL, MAS RECOMENDADO) Verificar se a App está no ar
