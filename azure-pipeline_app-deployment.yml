@@ -1,0 +1,52 @@
+trigger:
+  - main
+
+pool:
+  MyOwnAgentPool
+
+variables:
+  PYTHON_VERSION: '3.13'
+  BACKEND_DIR: 'backend'
+
+steps:
+# 2. Instalar Python
+- task: UsePythonVersion@0
+  inputs:
+    versionSpec: '$(PYTHON_VERSION)'
+
+# 3. Instalar dependências
+- script: |
+    python -m pip install --upgrade pip
+    pip install -r requirements.txt
+  displayName: 'Instalar dependências Python'
+
+# 4. Rodar migrações do banco
+- script: |
+    cd $(BACKEND_DIR)
+    alembic upgrade head || echo "Sem migrações"
+  displayName: 'Rodar migrações do banco'
+
+# 5. Configurar variáveis de ambiente
+- script: |
+    echo "##vso[task.setvariable variable=BINANCE_API_KEY]$(BINANCE_API_KEY)"
+    echo "##vso[task.setvariable variable=BINANCE_API_SECRET]$(BINANCE_API_SECRET)"
+  displayName: 'Configurar variáveis de ambiente'
+
+# # 6. Rodar testes (opcional)
+# - script: |
+#     pytest -v || echo "Sem testes configurados"
+#   displayName: 'Rodar testes'
+
+# 7. Rodar o backend (Flask/FastAPI)
+- script: |
+    cd $(BACKEND_DIR)
+    uvicorn main:app --host 0.0.0.0 --port 8000 &
+  displayName: 'Iniciar Backend'
+
+# # 8. (Opcional) Rodar o frontend
+# - script: |
+#     cd frontend
+#     npm install
+#     npm start &
+#   displayName: 'Iniciar Frontend'
+
