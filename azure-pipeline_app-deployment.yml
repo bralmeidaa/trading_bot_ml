@@ -14,15 +14,15 @@ steps:
 - script: |
     echo "Tentando parar o processo com PID: $(AppPID)"
     # Verifica se a variável AppPID não está vazia antes de tentar parar
-    if [ -n "$(App_PID)" ]; then
+    if [ -n "$App_PID" ]; then
       # Agora, verifica se o processo com esse PID está realmente rodando
       # O '2>/dev/null' suprime a mensagem de erro "No such process" se o PID não existir
-      if kill -0 $(App_PID) 2>/dev/null; then
-        echo "Processo com PID $(App_PID) está rodando. Enviando comando 'kill'..."
-        kill $(App_PID)
+      if kill -0 $App_PID 2>/dev/null; then
+        echo "Processo com PID $App_PID está rodando. Enviando comando 'kill'..."
+        kill $App_PID
         echo "Comando 'kill' enviado com sucesso."
       else
-        echo "A variável de PID $(App_PID) foi encontrada, mas o processo não está mais rodando."
+        echo "A variável de PID $App_PID foi encontrada, mas o processo não está mais rodando."
       fi
     else
       echo "Nenhuma variável de PID foi definida. Nada a fazer."
