@@ -15,7 +15,7 @@ steps:
     Contents: |
       backend/**
       database/**
-      requeriments.txt
+      requirements.txt
     TargetFolder: '$(APP_DIR)'
     OverWrite: true
     ignoreMakeDirErrors: true
