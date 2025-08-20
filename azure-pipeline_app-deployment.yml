@@ -5,8 +5,7 @@ pool:
   name: MyOwnAgentPool
 
 variables:
-  APP_DIR: /home/bralmeidaa/tbm
-  BACKEND_DIR: 'backend'
+  APP_DIR: /home/bralmeidaa/tbm/
 
 steps:
 # 1. Copy App Contents
@@ -20,7 +19,7 @@ steps:
 # 2. Install dependencies
 - script: |
     cd $(APP_DIR)
-    
+
     python3 -m venv .venv
 
     source .venv/bin/activate
