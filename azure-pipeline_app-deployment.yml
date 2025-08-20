@@ -12,7 +12,10 @@ steps:
 - task: CopyFiles@2
   inputs:
     SourceFolder: '$(System.DefaultWorkingDirectory)'
-    Contents: '**'
+    Contents: |
+      backend/**
+      database/**
+      requeriments.txt
     TargetFolder: '$(APP_DIR)'
     OverWrite: true
     ignoreMakeDirErrors: true
