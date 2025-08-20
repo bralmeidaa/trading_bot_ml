@@ -1,0 +1,258 @@
+{
+  "results": [
+    {
+      "total_return": 0.06033432873570735,
+      "total_trades": 1,
+      "win_rate": 100.0,
+      "profit_factor": 0,
+      "avg_win": 6.033432873570734,
+      "avg_loss": 0,
+      "config": {
+        "symbol": "BTCUSDT",
+        "timeframe": "1m",
+        "horizon": 2,
+        "cost": 10,
+        "model": "lightgbm",
+        "threshold": 0.65,
+        "stop_loss": 0.02,
+        "take_profit": 0.04
+      },
+      "symbol": "BTCUSDT",
+      "timeframe": "1m",
+      "score": 1.0030167164367854
+    },
+    {
+      "total_return": 0.04195683230058637,
+      "total_trades": 2,
+      "win_rate": 50.0,
+      "profit_factor": 31.79781637508993,
+      "avg_win": 4.331916370063076,
+      "avg_loss": 0.1362331400044392,
+      "config": {
+        "symbol": "BTCUSDT",
+        "timeframe": "1m",
+        "horizon": 2,
+        "cost": 10,
+        "model": "lightgbm",
+        "threshold": 0.6,
+        "stop_loss": 0.03,
+        "take_profit": 0.04
+      },
+      "symbol": "BTCUSDT",
+      "timeframe": "1m",
+      "score": 1.0020978416150292
+    },
+    {
+      "total_return": 0.03729978297425819,
+      "total_trades": 2,
+      "win_rate": 100.0,
+      "profit_factor": 0,
+      "avg_win": 1.8649891487129096,
+      "avg_loss": 0,
+      "config": {
+        "symbol": "BTCUSDT",
+        "timeframe": "1m",
+        "horizon": 2,
+        "cost": 10,
+        "model": "lightgbm",
+        "threshold": 0.6,
+        "stop_loss": 0.02,
+        "take_profit": 0.04
+      },
+      "symbol": "BTCUSDT",
+      "timeframe": "1m",
+      "score": 1.0018649891487128
+    },
+    {
+      "total_return": 0.021158949624530618,
+      "total_trades": 2,
+      "win_rate": 50.0,
+      "profit_factor": 30.201506950489115,
+      "avg_win": 2.1883533792751986,
+      "avg_loss": 0.07245841682213669,
+      "config": {
+        "symbol": "BTCUSDT",
+        "timeframe": "1m",
+        "horizon": 1,
+        "cost": 10,
+        "model": "xgboost",
+        "threshold": 0.65,
+        "stop_loss": 0.015,
+        "take_profit": 0.03
+      },
+      "symbol": "BTCUSDT",
+      "timeframe": "1m",
+      "score": 1.0010579474812265
+    },
+    {
+      "total_return": 0.01826403435931802,
+      "total_trades": 2,
+      "win_rate": 50.0,
+      "profit_factor": 14.406454816150374,
+      "avg_win": 1.9626365759362414,
+      "avg_loss": 0.1362331400044392,
+      "config": {
+        "symbol": "BTCUSDT",
+        "timeframe": "1m",
+        "horizon": 2,
+        "cost": 10,
+        "model": "lightgbm",
+        "threshold": 0.55,
+        "stop_loss": 0.02,
+        "take_profit": 0.04
+      },
+      "symbol": "BTCUSDT",
+      "timeframe": "1m",
+      "score": 1.0009132017179658
+    },
+    {
+      "total_return": 0.017972269635911888,
+      "total_trades": 2,
+      "win_rate": 50.0,
+      "profit_factor": 27.842532760572972,
+      "avg_win": 1.8641814115794577,
+      "avg_loss": 0.06695444798826897,
+      "config": {
+        "symbol": "BTCUSDT",
+        "timeframe": "1m",
+        "horizon": 1,
+        "cost": 10,
+        "model": "xgboost",
+        "threshold": 0.65,
+        "stop_loss": 0.02,
+        "take_profit": 0.03
+      },
+      "symbol": "BTCUSDT",
+      "timeframe": "1m",
+      "score": 1.0008986134817957
+    },
+    {
+      "total_return": 0.011300023773111527,
+      "total_trades": 3,
+      "win_rate": 33.33333333333333,
+      "profit_factor": 5.078274711119562,
+      "avg_win": 1.8641814115794577,
+      "avg_loss": 0.3670895171341525,
+      "config": {
+        "symbol": "BTCUSDT",
+        "timeframe": "1m",
+        "horizon": 1,
+        "cost": 10,
+        "model": "xgboost",
+        "threshold": 0.6,
+        "stop_loss": 0.015,
+        "take_profit": 0.03
+      },
+      "symbol": "BTCUSDT",
+      "timeframe": "1m",
+      "score": 1.0005650011886555
+    },
+    {
+      "total_return": 0.0031358100464273274,
+      "total_trades": 1,
+      "win_rate": 100.0,
+      "profit_factor": 0,
+      "avg_win": 0.31358100464273275,
+      "avg_loss": 0,
+      "config": {
+        "symbol": "BTCUSDT",
+        "timeframe": "1m",
+        "horizon": 1,
+        "cost": 10,
+        "model": "xgboost",
+        "threshold": 0.65,
+        "stop_loss": 0.025,
+        "take_profit": 0.03
+      },
+      "symbol": "BTCUSDT",
+      "timeframe": "1m",
+      "score": 1.0001567905023214
+    },
+    {
+      "total_return": 0.0031358100464273274,
+      "total_trades": 1,
+      "win_rate": 100.0,
+      "profit_factor": 0,
+      "avg_win": 0.31358100464273275,
+      "avg_loss": 0,
+      "config": {
+        "symbol": "BTCUSDT",
+        "timeframe": "1m",
+        "horizon": 1,
+        "cost": 10,
+        "model": "xgboost",
+        "threshold": 0.65,
+        "stop_loss": 0.03,
+        "take_profit": 0.03
+      },
+      "symbol": "BTCUSDT",
+      "timeframe": "1m",
+      "score": 1.0001567905023214
+    },
+    {
+      "total_return": 0.015105378299421542,
+      "total_trades": 3,
+      "win_rate": 66.66666666666666,
+      "profit_factor": 1.6319560617241535,
+      "avg_win": 1.0888812081110952,
+      "avg_loss": 0.667224586280036,
+      "config": {
+        "symbol": "BTCUSDT",
+        "timeframe": "1m",
+        "horizon": 1,
+        "cost": 10,
+        "model": "xgboost",
+        "threshold": 0.55,
+        "stop_loss": 0.015,
+        "take_profit": 0.03
+      },
+      "symbol": "BTCUSDT",
+      "timeframe": "1m",
+      "score": 0.9660446639724578
+    },
+    {
+      "total_return": 0.015933184675733913,
+      "total_trades": 3,
+      "win_rate": 66.66666666666666,
+      "profit_factor": 1.3266786260335024,
+      "avg_win": 1.2785026059863356,
+      "avg_loss": 0.9636867443992798,
+      "config": {
+        "symbol": "BTCUSDT",
+        "timeframe": "1m",
+        "horizon": 2,
+        "cost": 10,
+        "model": "lightgbm",
+        "threshold": 0.6,
+        "stop_loss": 0.015,
+        "take_profit": 0.04
+      },
+      "symbol": "BTCUSDT",
+      "timeframe": "1m",
+      "score": 0.6608086186006222
+    },
+    {
+      "total_return": 0.015933184675733913,
+      "total_trades": 3,
+      "win_rate": 66.66666666666666,
+      "profit_factor": 1.3266786260335024,
+      "avg_win": 1.2785026059863356,
+      "avg_loss": 0.9636867443992798,
+      "config": {
+        "symbol": "BTCUSDT",
+        "timeframe": "1m",
+        "horizon": 2,
+        "cost": 10,
+        "model": "lightgbm",
+        "threshold": 0.6,
+        "stop_loss": 0.025,
+        "take_profit": 0.04
+      },
+      "symbol": "BTCUSDT",
+      "timeframe": "1m",
+      "score": 0.6608086186006222
+    }
+  ],
+  "timestamp": "2025-08-20T20:00:24.835789",
+  "duration_minutes": 13.997608808676402
+}

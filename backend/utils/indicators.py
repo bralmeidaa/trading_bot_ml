@@ -1,8 +1,17 @@
 from typing import Optional
 import pandas as pd
 import pandas_ta as ta
+try:
+    from .cache import cache_indicators
+except ImportError:
+    # Fallback if cache not available
+    def cache_indicators(ttl=3600):
+        def decorator(func):
+            return func
+        return decorator
 
 
+@cache_indicators(ttl=3600)
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
     Expects columns: ['ts','open','high','low','close','volume']

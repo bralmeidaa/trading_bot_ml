@@ -5,9 +5,10 @@ import pandas as pd
 
 from .base import BaseStrategy
 from ..backtesting.engine import BacktestResult
-from ..ml.features import build_features, build_labels
-from ..ml.models import SklearnClassifierWrapper
+from ..ml.features import build_features, build_labels, select_features, create_feature_interactions
+from ..ml.models import UnifiedMLModel, create_model
 from ..core.risk import position_size
+from ..core.advanced_risk import AdvancedRiskManager, AdvancedRiskParams
 from ..utils.backtest_metrics import calc_max_drawdown, calc_sharpe
 
 
@@ -53,6 +54,13 @@ class MLProbStrategy(BaseStrategy):
         # Safeguard to avoid zero signals on test
         min_test_signals: int = 5,
         test_threshold_floor: float = 0.03,
+        # Advanced ML options
+        model_type: str = "ensemble",  # ensemble, xgboost, lightgbm, random_forest, legacy
+        use_advanced_features: bool = True,
+        feature_selection: bool = True,
+        max_features: int = 50,
+        use_advanced_risk: bool = True,
+        risk_params: AdvancedRiskParams = None,
     ) -> None:
         self.threshold = threshold
         self.exit_threshold = exit_threshold
@@ -77,15 +85,32 @@ class MLProbStrategy(BaseStrategy):
         self.calibrate_cv = calibrate_cv
         self.min_test_signals = int(min_test_signals)
         self.test_threshold_floor = float(test_threshold_floor)
+        
+        # Advanced ML options
+        self.model_type = model_type
+        self.use_advanced_features = use_advanced_features
+        self.feature_selection = feature_selection
+        self.max_features = max_features
+        self.use_advanced_risk = use_advanced_risk
+        self.risk_params = risk_params or AdvancedRiskParams()
+        
+        # Initialize advanced risk manager if enabled
+        self.risk_manager = None
+        if self.use_advanced_risk:
+            self.risk_manager = AdvancedRiskManager(self.risk_params)
 
     def run(self, df: pd.DataFrame) -> BacktestResult:
         if df.empty:
             return BacktestResult(trades=[], equity_curve=[], metrics={"message": "no data"})
 
         # Feature engineering
-        fdf = build_features(df)
+        fdf = build_features(df, advanced=self.use_advanced_features)
         if fdf.empty:
             return BacktestResult(trades=[], equity_curve=[], metrics={"message": "no features"})
+        
+        # Add feature interactions if using advanced features
+        if self.use_advanced_features:
+            fdf = create_feature_interactions(fdf, max_interactions=10)
 
         # Labels for training
         y = build_labels(fdf, horizon=self.label_horizon, cost_bp=self.label_cost_bp)
@@ -120,17 +145,33 @@ class MLProbStrategy(BaseStrategy):
             c for c in X_train.columns
             if c not in ("ts", "open", "high", "low", "close", "volume", "dt")
         ]
-        Xtr = X_train[feature_cols].to_numpy(dtype=float, copy=False)
-        Xte = X_test[feature_cols].to_numpy(dtype=float, copy=False)
+        
+        # Feature selection if enabled
+        if self.feature_selection and len(feature_cols) > self.max_features:
+            selected_features = select_features(
+                X_train[feature_cols], y_train, 
+                method="mutual_info", k=self.max_features
+            )
+            feature_cols = selected_features
+        
+        X_train_features = X_train[feature_cols]
+        X_test_features = X_test[feature_cols]
 
-        model = SklearnClassifierWrapper.create(
+        # Create advanced ML model
+        model = create_model(
+            model_type=self.model_type,
             calibrate=self.calibrate,
             calibrate_cv=self.calibrate_cv,
+            feature_selection=False,  # Already done above
+            max_features=self.max_features
         )
+        
         if len(np.unique(y_train)) < 2:
             # Not enough class diversity; fallback to no-trade
             return BacktestResult(trades=[], equity_curve=[{"ts": int(row.ts), "equity": 1000.0} for _, row in X_test.iterrows()], metrics={"message": "no class diversity"})
-        model.fit(Xtr, y_train.to_numpy())
+        
+        # Fit model and get training metrics
+        train_metrics = model.fit(X_train_features, y_train.to_numpy())
 
         # Auto threshold tuning on validation split inside training window
         if self.auto_threshold and len(X_train) >= 30:

@@ -1,0 +1,1 @@
+❌ No profitable configurations found even with optimizations!
