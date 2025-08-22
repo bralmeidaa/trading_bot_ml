@@ -1,0 +1,215 @@
+# Azure DevOps Pipeline for Trading Bot ML
+# Deploy to OCI VM with Docker
+
+trigger:
+  branches:
+    include:
+    - main
+    - develop
+  paths:
+    exclude:
+    - README.md
+    - docs/*
+
+variables:
+  # Azure DevOps Variables (set in pipeline variables)
+  # - OCI_VM_IP: IP address of your OCI VM
+  # - OCI_VM_USER: SSH username for OCI VM
+  # - OCI_SSH_KEY: SSH private key for OCI VM
+  # - BINANCE_API_KEY: Binance API key (optional, for live trading)
+  # - BINANCE_API_SECRET: Binance API secret (optional, for live trading)
+  
+  dockerImageName: 'trading-bot-ml'
+  dockerImageTag: '$(Build.BuildId)'
+  deploymentPath: '/opt/trading-bot-ml'
+
+stages:
+- stage: Build
+  displayName: 'Build and Test'
+  jobs:
+  - job: BuildJob
+    displayName: 'Build Docker Image'
+    pool:
+      vmImage: 'ubuntu-latest'
+    
+    steps:
+    - checkout: self
+      displayName: 'Checkout source code'
+    
+    - task: Docker@2
+      displayName: 'Build Docker image'
+      inputs:
+        command: 'build'
+        dockerfile: 'Dockerfile'
+        tags: |
+          $(dockerImageName):$(dockerImageTag)
+          $(dockerImageName):latest
+    
+    - task: Docker@2
+      displayName: 'Save Docker image'
+      inputs:
+        command: 'save'
+        arguments: '-o $(Build.ArtifactStagingDirectory)/trading-bot-ml.tar $(dockerImageName):$(dockerImageTag)'
+    
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Docker image artifact'
+      inputs:
+        pathToPublish: '$(Build.ArtifactStagingDirectory)'
+        artifactName: 'docker-image'
+    
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish deployment scripts'
+      inputs:
+        pathToPublish: '$(System.DefaultWorkingDirectory)'
+        artifactName: 'deployment-files'
+
+- stage: Deploy
+  displayName: 'Deploy to OCI VM'
+  dependsOn: Build
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  
+  jobs:
+  - deployment: DeployToOCI
+    displayName: 'Deploy to OCI VM'
+    environment: 'production'
+    pool:
+      vmImage: 'ubuntu-latest'
+    
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: docker-image
+            displayName: 'Download Docker image'
+          
+          - download: current
+            artifact: deployment-files
+            displayName: 'Download deployment files'
+          
+          - task: InstallSSHKey@0
+            displayName: 'Install SSH key'
+            inputs:
+              knownHostsEntry: '$(OCI_VM_IP) ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC...' # Replace with actual host key
+              sshPublicKey: '$(OCI_SSH_PUBLIC_KEY)'
+              sshKeySecureFile: 'oci-ssh-key'
+          
+          - task: Bash@3
+            displayName: 'Deploy to OCI VM'
+            inputs:
+              targetType: 'inline'
+              script: |
+                set -e
+                
+                echo "🚀 Starting deployment to OCI VM..."
+                
+                # Copy files to OCI VM
+                echo "📦 Copying files to OCI VM..."
+                scp -o StrictHostKeyChecking=no -r $(Pipeline.Workspace)/deployment-files/* $(OCI_VM_USER)@$(OCI_VM_IP):$(deploymentPath)/
+                scp -o StrictHostKeyChecking=no $(Pipeline.Workspace)/docker-image/trading-bot-ml.tar $(OCI_VM_USER)@$(OCI_VM_IP):$(deploymentPath)/
+                
+                # Execute deployment script on OCI VM
+                echo "🔧 Executing deployment on OCI VM..."
+                ssh -o StrictHostKeyChecking=no $(OCI_VM_USER)@$(OCI_VM_IP) << 'EOF'
+                  set -e
+                  cd $(deploymentPath)
+                  
+                  echo "🛑 Stopping existing containers..."
+                  sudo docker-compose down || true
+                  
+                  echo "🗑️ Cleaning up old images..."
+                  sudo docker system prune -f
+                  
+                  echo "📥 Loading new Docker image..."
+                  sudo docker load -i trading-bot-ml.tar
+                  
+                  echo "🔧 Setting up environment..."
+                  # Create .env file with secrets
+                  cat > .env << EOL
+                BINANCE_API_KEY=$(BINANCE_API_KEY)
+                BINANCE_API_SECRET=$(BINANCE_API_SECRET)
+                ENVIRONMENT=production
+                BUILD_ID=$(Build.BuildId)
+                EOL
+                  
+                  echo "🚀 Starting new containers..."
+                  sudo docker-compose up -d
+                  
+                  echo "⏳ Waiting for services to start..."
+                  sleep 30
+                  
+                  echo "🔍 Checking service health..."
+                  curl -f http://localhost:8000/api/health || exit 1
+                  
+                  echo "✅ Deployment completed successfully!"
+                  
+                  # Show running containers
+                  sudo docker-compose ps
+                EOF
+                
+                echo "🎉 Deployment to OCI VM completed!"
+          
+          - task: Bash@3
+            displayName: 'Verify deployment'
+            inputs:
+              targetType: 'inline'
+              script: |
+                echo "🔍 Verifying deployment..."
+                
+                # Test API endpoint
+                response=$(curl -s -o /dev/null -w "%{http_code}" http://$(OCI_VM_IP):8000/api/health)
+                
+                if [ $response -eq 200 ]; then
+                  echo "✅ API health check passed"
+                else
+                  echo "❌ API health check failed (HTTP $response)"
+                  exit 1
+                fi
+                
+                # Test dashboard
+                response=$(curl -s -o /dev/null -w "%{http_code}" http://$(OCI_VM_IP):8000/)
+                
+                if [ $response -eq 200 ]; then
+                  echo "✅ Dashboard is accessible"
+                else
+                  echo "❌ Dashboard is not accessible (HTTP $response)"
+                  exit 1
+                fi
+                
+                echo "🎉 All verification checks passed!"
+                echo "📊 Dashboard URL: http://$(OCI_VM_IP):8000"
+
+- stage: Rollback
+  displayName: 'Rollback (Manual)'
+  dependsOn: Deploy
+  condition: failed()
+  
+  jobs:
+  - job: RollbackJob
+    displayName: 'Rollback to Previous Version'
+    pool:
+      vmImage: 'ubuntu-latest'
+    
+    steps:
+    - task: Bash@3
+      displayName: 'Rollback deployment'
+      inputs:
+        targetType: 'inline'
+        script: |
+          echo "🔄 Starting rollback process..."
+          
+          ssh -o StrictHostKeyChecking=no $(OCI_VM_USER)@$(OCI_VM_IP) << 'EOF'
+            set -e
+            cd $(deploymentPath)
+            
+            echo "🛑 Stopping current containers..."
+            sudo docker-compose down
+            
+            echo "🔄 Rolling back to previous image..."
+            sudo docker tag $(dockerImageName):previous $(dockerImageName):latest
+            
+            echo "🚀 Starting previous version..."
+            sudo docker-compose up -d
+            
+            echo "✅ Rollback completed!"
+          EOF

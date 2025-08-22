@@ -1,33 +1,15 @@
 # Task List
 
-1. ✅ Configurar ambiente e instalar dependências
+1. ✅ Implementar sistema de sinais alternativos e múltiplas estratégias
 
-2. ✅ Melhorar feature engineering com indicadores avançados
+2. ✅ Desenvolver engine de cruzamento de estratégias com votação
 
-3. ✅ Implementar modelos ML mais avançados (Random Forest, XGBoost)
+3. ✅ Implementar sinais alternativos (volume, spread, momentum, mean reversion)
 
-4. ✅ Criar ensemble methods e feature selection
+4. ✅ Executar backtesting em múltiplas moedas (BTC, ETH, BNB, ADA, SOL, etc)
 
-5. ✅ Implementar risk management avançado (Kelly criterion, dynamic sizing)
+5. ✅ Validar estratégias em diferentes condições de mercado
 
-6. ✅ Criar framework de backtesting abrangente com múltiplas métricas
-
-7. ✅ Implementar walk-forward optimization e Monte Carlo
-
-8. ✅ Validar lucratividade com testes extensivos em múltiplos pares/períodos
-
-9. ✅ Implementar sistema de monitoramento e métricas avançadas
-
-10. ✅ Otimizar performance e adicionar caching
-
-11. ✅ Otimização massiva de parâmetros para maximizar lucratividade
-
-12. ✅ Otimizar para operações de curto prazo (1-5min candles)
-
-13. ✅ Testes massivos de robustez em múltiplos cenários
-
-14. ✅ Análise diagnóstica para identificar problemas de lucratividade
-
-15. ✅ Otimização final com correções baseadas no diagnóstico
+6. ✅ Gerar relatório final com melhores configurações por moeda/mercado
 
 
