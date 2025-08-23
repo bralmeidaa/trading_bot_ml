@@ -32,8 +32,8 @@ stages:
   jobs:
   - job: BuildJob
     displayName: 'Build Docker Image'
-    pool:
-      vmImage: 'ubuntu-latest'
+    # pool:
+    #   vmImage: 'ubuntu-latest'
     
     steps:
     - checkout: self
@@ -75,8 +75,8 @@ stages:
   - deployment: DeployToOCI
     displayName: 'Deploy to OCI VM'
     environment: 'production'
-    pool:
-      vmImage: 'ubuntu-latest'
+    # pool:
+    #   vmImage: 'ubuntu-latest'
     
     strategy:
       runOnce:
@@ -250,8 +250,8 @@ stages:
   jobs:
   - job: RollbackJob
     displayName: 'Rollback to Previous Version'
-    pool:
-      vmImage: 'ubuntu-latest'
+    # pool:
+    #   vmImage: 'ubuntu-latest'
     
     steps:
     # - task: Bash@3
