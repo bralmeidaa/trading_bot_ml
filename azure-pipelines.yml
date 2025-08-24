@@ -23,6 +23,7 @@ variables:
   # - BINANCE_API_SECRET: 'XJcCVpNSi7AyzIW0VHSW6M1sfeUiBlG8KnFj4OkEJ86spJabBDKQkTjAhDXdv6OR' Binance API secret (optional, for live trading)
   dockerImageName: 'trading-bot-ml'
   dockerImageTag: '$(Build.BuildId)'
+  dockerImageLatestTag: 'latest'
   deploymentPath: '/opt/trading-bot-ml'
 
 stages:
@@ -45,9 +46,12 @@ stages:
     - task: Docker@2
       displayName: 'Build Docker image'
       inputs:
+        repository: $(dockerImageName)
         command: 'build'
-        dockerfile: 'Dockerfile'
-        tags: $(dockerImageTag)
+        dockerfile: './Dockerfile'
+        tags: |
+          $(dockerImageTag)
+          $(dockerImageLatestTag)
     
     - task: CmdLine@2
       displayName: 'List Docker Images'
