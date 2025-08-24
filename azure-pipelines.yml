@@ -93,9 +93,9 @@ stages:
           - task: InstallSSHKey@0
             displayName: 'Install SSH key'
             inputs:
-              knownHostsEntry: '$(OCI_VM_IP) ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC...' # Replace with actual host key
+              knownHostsEntry: '$(OCI_VM_IP) ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCzqxUK+Pt0irA+WwQ9CagvM0FZ7QWhGoYO0FmyBfEeArtft7uoqDqPDkSXX8RtFtJYWFhgnFH83A+HwOkacBVOJaJXDNJtz8oGJmamQR59iLkMlqI/J2EfIy/YH0bK70I7T0X4TeyP59OzxsOH7uIsxtqmaLir0l6at0//WUtW+SekBCztC4VHUxouD4ePccBh6img2aH0UCcRYC47SQO+4fxUeTZLUDJ/U2xaIaGOZKOp6n5KLLoOuUnghVlZgs4o0ZC4gfrgDzkOeNkJsinBU9/1r9LTdpSEgnuoUqxDQms+uUlgmiT1CtrleECf7Gf/1I6055iwZqKleaeuR7j7je96KnlOsY8bHSq4LKzLIUtgEbPkHxdXKK7HG94eWtQIZ55tCnoWT9KHGgdP301BosoEXJWEnKJaptX3XCtT1nIBQhfL0YNfD3ZiUNCduOKrObS82njwj8JhjzsgVJX9v2ka4BDr8T5gG31rZ7kC27lAMYkLTYkTrrV1DuMaq5s=' # Replace with actual host key
               sshPublicKey: '$(OCI_SSH_PUBLIC_KEY)'
-              sshKeySecureFile: 'oci-ssh-key'
+              sshKeySecureFile: 'OCI_VM_SSH_KEY.key'
           
           - task: Bash@3
             displayName: 'Deploy to OCI VM'
