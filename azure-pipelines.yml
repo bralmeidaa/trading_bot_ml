@@ -135,6 +135,9 @@ stages:
                   
                   echo "📥 Loading new Docker image..."
                   sudo docker load -i trading-bot-ml.tar
+
+                  echo "Deleting image file"
+                  sudo rm trading-bot-ml.tar
                   
                   echo "🔧 Setting up environment..."
                   # Create .env file with secrets
