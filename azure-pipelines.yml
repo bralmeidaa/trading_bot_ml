@@ -44,11 +44,12 @@ stages:
         dockerVersion: '17.09.0-ce'
 
     - task: Docker@2
-      displayName: 'Build Docker image'
+      displayName: 'Build & Push Docker image to repository'
       inputs:
-        repository: $(dockerImageName)
-        command: 'build'
-        dockerfile: './Dockerfile'
+        containerRegistry: 'docker-account-bralmeida'
+        repository: 'bralmeida/trading-bot-ml'
+        command: 'buildAndPush'
+        Dockerfile: './Dockerfile'
         tags: |
           $(dockerImageTag)
           $(dockerImageLatestTag)
@@ -57,18 +58,18 @@ stages:
       displayName: 'List Docker Images'
       inputs:
         script: 'docker image ls'
-    
-    - task: Docker@2
-      displayName: 'Save Docker image'
-      inputs:
-        command: 'save'
-        arguments: '-o $(Build.ArtifactStagingDirectory)/trading-bot-ml.tar $(dockerImageName):$(dockerImageTag)'
-    
-    - task: PublishBuildArtifacts@1
-      displayName: 'Publish Docker image artifact'
-      inputs:
-        pathToPublish: '$(Build.ArtifactStagingDirectory)'
-        artifactName: 'docker-image'
+
+    # - task: Docker@2
+    #   displayName: 'Save Docker image'
+    #   inputs:
+    #     command: 'save'
+    #     arguments: '-o $(Build.ArtifactStagingDirectory)/trading-bot-ml.tar $(dockerImageName):$(dockerImageTag)'
+
+    # - task: PublishBuildArtifacts@1
+    #   displayName: 'Publish Docker image artifact'
+    #   inputs:
+    #     pathToPublish: '$(Build.ArtifactStagingDirectory)'
+    #     artifactName: 'docker-image'
     
     - task: PublishBuildArtifacts@1
       displayName: 'Publish deployment scripts'
@@ -92,9 +93,9 @@ stages:
       runOnce:
         deploy:
           steps:
-          - download: current
-            artifact: docker-image
-            displayName: 'Download Docker image'
+          # - download: current
+          #   artifact: docker-image
+          #   displayName: 'Download Docker image'
           
           - download: current
             artifact: deployment-files
@@ -119,7 +120,7 @@ stages:
                 # Copy files to OCI VM
                 echo "📦 Copying files to OCI VM..."
                 scp -o StrictHostKeyChecking=no -r $(Pipeline.Workspace)/deployment-files/* $(OCI_VM_USER)@$(OCI_VM_IP):$(deploymentPath)/
-                scp -o StrictHostKeyChecking=no $(Pipeline.Workspace)/docker-image/trading-bot-ml.tar $(OCI_VM_USER)@$(OCI_VM_IP):$(deploymentPath)/
+                #scp -o StrictHostKeyChecking=no $(Pipeline.Workspace)/docker-image/trading-bot-ml.tar $(OCI_VM_USER)@$(OCI_VM_IP):$(deploymentPath)/
                 
                 # Execute deployment script on OCI VM
                 echo "🔧 Executing deployment on OCI VM..."
@@ -134,10 +135,11 @@ stages:
                   sudo docker system prune -f
                   
                   echo "📥 Loading new Docker image..."
-                  sudo docker load -i trading-bot-ml.tar
+                  sudo docker pull
+                  #sudo docker load -i trading-bot-ml.tar
 
                   echo "Deleting image file"
-                  sudo rm trading-bot-ml.tar
+                  #sudo rm trading-bot-ml.tar
                   
                   echo "🔧 Setting up environment..."
                   # Create .env file with secrets
