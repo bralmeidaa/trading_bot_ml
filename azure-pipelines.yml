@@ -155,14 +155,15 @@ stages:
                   
                   echo "⏳ Waiting for services to start..."
                   sleep 30
+
+                  echo "Look the running containers"
+                  sudo docker compose ps
                   
                   echo "🔍 Checking service health..."
                   curl -f http://localhost:8000/api/health || exit 1
                   
                   echo "✅ Deployment completed successfully!"
                   
-                  # Show running containers
-                  sudo docker compose ps
                 EOF
                 
                 echo "🎉 Deployment to OCI VM completed!"
