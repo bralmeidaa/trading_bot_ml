@@ -79,7 +79,7 @@ stages:
 - stage: Deploy
   displayName: 'Deploy to OCI VM'
   dependsOn: Build
-  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  condition: succeeded()
   
   jobs:
   - deployment: DeployToOCI
