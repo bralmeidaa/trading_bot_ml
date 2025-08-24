@@ -47,9 +47,7 @@ stages:
       inputs:
         command: 'build'
         dockerfile: 'Dockerfile'
-        tags: |
-          $(dockerImageName):$(dockerImageTag)
-          $(dockerImageName):latest
+        tags: $(dockerImageTag)
     
     - task: CmdLine@2
       displayName: 'List Docker Images'
