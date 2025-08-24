@@ -135,7 +135,7 @@ stages:
                   sudo docker system prune -f
                   
                   echo "📥 Loading new Docker image..."
-                  sudo docker pull
+                  sudo docker compose pull
                   #sudo docker load -i trading-bot-ml.tar
 
                   echo "Deleting image file"
