@@ -25,6 +25,10 @@ variables:
   dockerImageTag: '$(Build.BuildId)'
   dockerImageLatestTag: 'latest'
   deploymentPath: '/opt/trading-bot-ml'
+  registryUrl: 'registry-1.docker.io'
+  imageRepository: 'bralmeida/trading-bot-ml'
+  dockerfilePath: './Dockerfile'
+
 
 stages:
 - stage: Build
@@ -43,16 +47,44 @@ stages:
       inputs:
         dockerVersion: '17.09.0-ce'
 
-    - task: Docker@2
-      displayName: 'Build & Push Docker image to repository'
+    # - task: Docker@2
+    #   displayName: 'Build & Push Docker image to repository'
+    #   inputs:
+    #     containerRegistry: 'docker-account-bralmeida'
+    #     repository: 'bralmeida/trading-bot-ml'
+    #     command: 'buildAndPush'
+    #     Dockerfile: './Dockerfile'
+    #     tags: |
+    #       $(dockerImageTag)
+    #       $(dockerImageLatestTag)
+
+    # VERSÃO NOVA (A SOLUÇÃO)
+    - task: Bash@3
+      displayName: 'Build and Push multi-arch image with Buildx'
       inputs:
-        containerRegistry: 'docker-account-bralmeida'
-        repository: 'bralmeida/trading-bot-ml'
-        command: 'buildAndPush'
-        Dockerfile: './Dockerfile'
-        tags: |
-          $(dockerImageTag)
-          $(dockerImageLatestTag)
+        targetType: 'inline'
+        script: |
+          # Login no seu registro de container
+          # (Use a forma de autenticação apropriada para sua pipeline)
+          echo $(DOCKER_LOGIN_TOKEN) | docker login -u $(DOCKER_LOGIN_USERNAME) --password-stdin
+
+          # Habilita o buildx (QEMU é necessário para emular outras arquiteturas)
+          docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+
+          # Cria e seleciona um builder do buildx
+          docker buildx create --use
+
+          echo "Iniciando build para múltiplas arquiteturas..."
+
+          # O comando principal: constrói para amd64 e arm64 e envia (--push)
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --tag $(imageRepository):$(dockerImageLatestTag) \
+            --file $(dockerfilePath) \
+            . \
+            --push
+
+            docker logout
     
     - task: CmdLine@2
       displayName: 'List Docker Images'
