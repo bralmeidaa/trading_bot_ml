@@ -63,8 +63,7 @@ stages:
         repository: 'bralmeida/trading-bot-ml'
         command: 'push'
         tags: |
-          '$(dockerImageLatestTag)'
-          '$(dockerImageTag)'
+          '$(imageRepository):$(dockerImageLatestTag)'
 
     - task: CmdLine@2
       displayName: 'List Docker Images'
