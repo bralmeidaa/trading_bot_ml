@@ -94,9 +94,9 @@ stages:
           #   artifact: docker-image
           #   displayName: 'Download Docker image'
           
-          - download: current
-            artifact: deployment-files
-            displayName: 'Download deployment files'
+          # - download: current
+          #   artifact: deployment-files
+          #   displayName: 'Download deployment files'
           
           - task: InstallSSHKey@0
             displayName: 'Install SSH key'
