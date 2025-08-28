@@ -62,6 +62,9 @@ stages:
         containerRegistry: 'docker-account-bralmeida'
         repository: 'bralmeida/trading-bot-ml'
         command: 'push'
+        tags: |
+          '$(dockerImageLatestTag)'
+          '$(dockerImageTag)'
 
     - task: CmdLine@2
       displayName: 'List Docker Images'
