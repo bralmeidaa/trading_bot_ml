@@ -71,56 +71,37 @@ stages:
 
     # VERSÃO NOVA (A SOLUÇÃO)
     - task: Bash@3
-      displayName: 'Build and Push multi-arch image with Buildx'
+      displayName: 'Build multi-arch image with Buildx'
       inputs:
-        targetType: 'inline'
         script: |
-          #Login no seu registro de container
-          #(Use a forma de autenticação apropriada para sua pipeline)
-          echo $(DOCKER_LOGIN_TOKEN) | sudo -E docker login -u $(DOCKER_LOGIN_USERNAME) --password-stdin
+          # #Login no seu registro de container
+          # #(Use a forma de autenticação apropriada para sua pipeline)
+          # echo $(DOCKER_LOGIN_TOKEN) | sudo -E docker login -u $(DOCKER_LOGIN_USERNAME) --password-stdin
 
-          #Habilita o buildx (QEMU é necessário para emular outras arquiteturas)
-          #sudo docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-
+          echo "Iniciando build para múltiplas arquiteturas..."
           sudo docker buildx version
 
-          #Cria e seleciona um builder do buildx
-          #sudo docker buildx create --use
-          echo "Iniciando build para múltiplas arquiteturas..."
-
-          #O comando principal: constrói para amd64 e arm64 e envia (--push)
+          #O comando principal: constrói arm64
           sudo docker buildx build \
             --platform linux/arm64 \
-            --tag bralmeida/trading-bot-ml:test123 \
+            --tag $(imageRepository):$(dockerImageTag) \
+            --tag $(imageRepository):$(dockerImageLatestTag) \
             --file ./Dockerfile \
-            . \
-            --push
+            --output=type=docker .
 
           sudo docker logout
-      env:
-        DOCKER_LOGIN_USERNAME: $(DOCKER_LOGIN_USERNAME)
-        DOCKER_LOGIN_TOKEN: $(DOCKER_LOGIN_TOKEN)
-        dockerImageTag: '$(dockerImageTag)'
-        dockerImageLatestTag: $(dockerImageLatestTag)
-        imageRepository: $(imageRepository)
-        dockerfilePath: $(dockerfilePath)
     
+    - task: Docker@2
+      displayName: 'Docker Push'
+      inputs:
+        containerRegistry: 'docker-account-bralmeida'
+        repository: 'bralmeida/trading-bot-ml'
+        command: 'push'
+
     - task: CmdLine@2
       displayName: 'List Docker Images'
       inputs:
         script: 'sudo docker image ls'
-
-    # - task: Docker@2
-    #   displayName: 'Save Docker image'
-    #   inputs:
-    #     command: 'save'
-    #     arguments: '-o $(Build.ArtifactStagingDirectory)/trading-bot-ml.tar $(dockerImageName):$(dockerImageTag)'
-
-    # - task: PublishBuildArtifacts@1
-    #   displayName: 'Publish Docker image artifact'
-    #   inputs:
-    #     pathToPublish: '$(Build.ArtifactStagingDirectory)'
-    #     artifactName: 'docker-image'
     
     - task: PublishBuildArtifacts@1
       displayName: 'Publish deployment scripts'
