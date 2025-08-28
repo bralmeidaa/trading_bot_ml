@@ -80,12 +80,12 @@ stages:
           echo $(DOCKER_LOGIN_TOKEN) | sudo -E docker login -u $(DOCKER_LOGIN_USERNAME) --password-stdin
 
           #Habilita o buildx (QEMU é necessário para emular outras arquiteturas)
-          sudo docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+          #sudo docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
 
           sudo docker buildx version
 
           #Cria e seleciona um builder do buildx
-          sudo docker buildx create --use
+          #sudo docker buildx create --use
           echo "Iniciando build para múltiplas arquiteturas..."
 
           #O comando principal: constrói para amd64 e arm64 e envia (--push)
@@ -97,6 +97,9 @@ stages:
             --push
 
           sudo docker logout
+      env:
+        DOCKER_LOGIN_USERNAME: $(DOCKER_LOGIN_USERNAME)
+        DOCKER_LOGIN_TOKEN: $(DOCKER_LOGIN_TOKEN)
     
     - task: CmdLine@2
       displayName: 'List Docker Images'
