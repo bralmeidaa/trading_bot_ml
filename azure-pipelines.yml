@@ -55,24 +55,11 @@ stages:
     #       $(dockerImageTag)
     #       $(dockerImageLatestTag)
 
-    # - task: bash
-    #   displayName: 'Install Docker Buildx Plugin'
-    #   inputs:
-    #     targetType: 'inline'
-    #     script: |
-    #       set -e
-    #       echo "Verificando/Instalando o plugin docker buildx..."
-    #       BUILDX_VERSION=$(curl --silent "https://api.github.com/repos/docker/buildx/releases/latest" | grep -Po '"tag_name": "\K.*?(?=")')
-    #       mkdir -p ~/.docker/cli-plugins
-    #       curl -L "https://github.com/docker/buildx/releases/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.linux-amd64" -o ~/.docker/cli-plugins/docker-buildx
-    #       chmod +x ~/.docker/cli-plugins/docker-buildx
-    #       echo "Verificação da instalação:"
-    #       docker buildx version
-
     # VERSÃO NOVA (A SOLUÇÃO)
     - task: Bash@3
       displayName: 'Build multi-arch image with Buildx'
       inputs:
+        targetType: 'inline'
         script: |
           # #Login no seu registro de container
           # #(Use a forma de autenticação apropriada para sua pipeline)
@@ -86,7 +73,7 @@ stages:
             --platform linux/arm64 \
             --tag $(imageRepository):$(dockerImageTag) \
             --tag $(imageRepository):$(dockerImageLatestTag) \
-            --file ./Dockerfile \
+            --file $(dockerfilePath) \
             --output=type=docker .
 
           sudo docker logout
