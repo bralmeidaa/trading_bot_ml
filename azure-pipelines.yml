@@ -23,7 +23,7 @@ variables:
   dockerImageLatestTag: 'latest'
   deploymentPath: '/opt/trading-bot-ml'
   registryUrl: 'registry-1.docker.io'
-  imageRepository: 'docker.io/bralmeida/trading-bot-ml'
+  imageRepository: 'bralmeida/trading-bot-ml'
   dockerfilePath: './Dockerfile'
 
 
