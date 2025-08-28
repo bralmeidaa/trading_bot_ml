@@ -18,7 +18,6 @@ variables:
   # Azure DevOps Variables (set in pipeline variables)
   # - BINANCE_API_KEY: 'tdeQHHeCpf6C0eGYWNeE1LsxIOoZ5HHUUSgsHWD1V5aaest9CDPkf66HRiJPi3Lh' Binance API key (optional, for live trading)
   # - BINANCE_API_SECRET: 'XJcCVpNSi7AyzIW0VHSW6M1sfeUiBlG8KnFj4OkEJ86spJabBDKQkTjAhDXdv6OR' Binance API secret (optional, for live trading)
-  dockerImageName: 'trading-bot-ml'
   dockerImageTag: '$(Build.BuildId)'
   dockerImageLatestTag: 'latest'
   deploymentPath: '/opt/trading-bot-ml'
@@ -33,27 +32,10 @@ stages:
   jobs:
   - job: BuildJob
     displayName: 'Build Docker Image'
-    # pool:
-    #   vmImage: 'ubuntu-latest'
     
     steps:
     - checkout: self
       displayName: 'Checkout source code'
-    
-    # - task: DockerInstaller@0
-    #   inputs:
-    #     dockerVersion: '28.3.3'
-
-    # - task: Docker@2
-    #   displayName: 'Build & Push Docker image to repository'
-    #   inputs:
-    #     containerRegistry: 'docker-account-bralmeida'
-    #     repository: 'bralmeida/trading-bot-ml'
-    #     command: 'buildAndPush'
-    #     Dockerfile: './Dockerfile'
-    #     tags: |
-    #       $(dockerImageTag)
-    #       $(dockerImageLatestTag)
 
     # VERSÃO NOVA (A SOLUÇÃO)
     - task: Bash@3
@@ -61,23 +43,19 @@ stages:
       inputs:
         targetType: 'inline'
         script: |
-          # #Login no seu registro de container
-          # #(Use a forma de autenticação apropriada para sua pipeline)
-          # echo $(DOCKER_LOGIN_TOKEN) | sudo -E docker login -u $(DOCKER_LOGIN_USERNAME) --password-stdin
-
           echo "Iniciando build para múltiplas arquiteturas..."
           sudo docker buildx version
 
           #O comando principal: constrói arm64
           sudo docker buildx build \
             --platform linux/arm64 \
-            --tag $(imageRepository):$(dockerImageTag) \
             --tag $(imageRepository):$(dockerImageLatestTag) \
+            --tag $(imageRepository):$(dockerImageTag) \
             --file $(dockerfilePath) \
             --output=type=docker .
 
           sudo docker logout
-    
+  
     - task: Docker@2
       displayName: 'Docker Push'
       inputs:
@@ -90,11 +68,11 @@ stages:
       inputs:
         script: 'sudo docker image ls'
     
-    - task: PublishBuildArtifacts@1
-      displayName: 'Publish deployment scripts'
-      inputs:
-        pathToPublish: '$(System.DefaultWorkingDirectory)'
-        artifactName: 'deployment-files'
+    # - task: PublishBuildArtifacts@1
+    #   displayName: 'Publish deployment scripts'
+    #   inputs:
+    #     pathToPublish: '$(System.DefaultWorkingDirectory)'
+    #     artifactName: 'deployment-files'
 
 - stage: Deploy
   displayName: 'Deploy to OCI VM'
@@ -137,8 +115,8 @@ stages:
                 echo "🚀 Starting deployment to OCI VM..."
                 
                 # Copy files to OCI VM
-                echo "📦 Copying files to OCI VM..."
-                scp -o StrictHostKeyChecking=no -r $(Pipeline.Workspace)/deployment-files/* $(OCI_VM_USER)@$(OCI_VM_IP):$(deploymentPath)/
+                #echo "📦 Copying files to OCI VM..."
+                #scp -o StrictHostKeyChecking=no -r $(Pipeline.Workspace)/deployment-files/* $(OCI_VM_USER)@$(OCI_VM_IP):$(deploymentPath)/
                 #scp -o StrictHostKeyChecking=no $(Pipeline.Workspace)/docker-image/trading-bot-ml.tar $(OCI_VM_USER)@$(OCI_VM_IP):$(deploymentPath)/
                 
                 # Execute deployment script on OCI VM
