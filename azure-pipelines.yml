@@ -91,7 +91,7 @@ stages:
           #O comando principal: constrói para amd64 e arm64 e envia (--push)
           sudo docker buildx build \
             --platform linux/arm64 \
-            --tag bralmeida/trading-bot-ml:testbralmeida/trading-bot-ml:test \
+            --tag bralmeida/trading-bot-ml:test \
             --file ./Dockerfile \
             . \
             --push
