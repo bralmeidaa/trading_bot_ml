@@ -23,7 +23,7 @@ variables:
   dockerImageLatestTag: 'latest'
   deploymentPath: '/opt/trading-bot-ml'
   registryUrl: 'registry-1.docker.io'
-  imageRepository: 'bralmeida/trading-bot-ml'
+  imageRepository: 'docker/bralmeida/trading-bot-ml'
   dockerfilePath: './Dockerfile'
 
 
@@ -92,6 +92,7 @@ stages:
           sudo docker buildx build \
             --platform linux/arm64 \
             --tag $(imageRepository):$(dockerImageLatestTag) \
+            --tag $(imageRepository):$(dockerImageTag) \
             --file $(dockerfilePath) \
             . \
             --push
