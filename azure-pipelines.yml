@@ -116,7 +116,7 @@ stages:
                 
                 # Copy files to OCI VM
                 #echo "📦 Copying files to OCI VM..."
-                #scp -o StrictHostKeyChecking=no -r $(Pipeline.Workspace)/deployment-files/* $(OCI_VM_USER)@$(OCI_VM_IP):$(deploymentPath)/
+                scp -o StrictHostKeyChecking=no -r $(System.DefaultWorkingDirectory)/* $(OCI_VM_USER)@$(OCI_VM_IP):$(deploymentPath)/
                 #scp -o StrictHostKeyChecking=no $(Pipeline.Workspace)/docker-image/trading-bot-ml.tar $(OCI_VM_USER)@$(OCI_VM_IP):$(deploymentPath)/
                 
                 # Execute deployment script on OCI VM
