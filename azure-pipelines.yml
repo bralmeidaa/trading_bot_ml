@@ -50,7 +50,6 @@ stages:
           sudo docker buildx build \
             --platform linux/arm64 \
             --tag $(imageRepository):$(dockerImageLatestTag) \
-            --tag $(imageRepository):$(dockerImageTag) \
             --file $(dockerfilePath) \
             --output=type=docker .
 
