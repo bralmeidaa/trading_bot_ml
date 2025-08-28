@@ -11,8 +11,8 @@
 #     - README.md
 #     - docs/*
 
-# pool:
-#   name: trading-bot-ml-vm
+pool:
+  name: trading-bot-ml-vm
 
 variables:
   # Azure DevOps Variables (set in pipeline variables)
@@ -33,16 +33,16 @@ stages:
   jobs:
   - job: BuildJob
     displayName: 'Build Docker Image'
-    pool:
-      vmImage: 'ubuntu-latest'
+    # pool:
+    #   vmImage: 'ubuntu-latest'
     
     steps:
     - checkout: self
       displayName: 'Checkout source code'
     
-    - task: DockerInstaller@0
-      inputs:
-        dockerVersion: '28.3.3'
+    # - task: DockerInstaller@0
+    #   inputs:
+    #     dockerVersion: '28.3.3'
 
     # - task: Docker@2
     #   displayName: 'Build & Push Docker image to repository'
@@ -130,8 +130,8 @@ stages:
   - deployment: DeployToOCI
     displayName: 'Deploy to OCI VM'
     environment: 'production'
-    pool:
-      vmImage: 'ubuntu-latest'
+    # pool:
+    #   vmImage: 'ubuntu-latest'
     
     strategy:
       runOnce:
@@ -250,8 +250,8 @@ stages:
   jobs:
   - job: RollbackJob
     displayName: 'Rollback to Previous Version'
-    pool:
-      vmImage: 'ubuntu-latest'
+    # pool:
+    #   vmImage: 'ubuntu-latest'
     
     steps:
     - task: Bash@3
