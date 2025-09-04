@@ -52,6 +52,11 @@ stages:
       inputs:
         targetType: 'inline'
         script: |
+          docker run --rm --privileged tonistiigi/binfmt --install all
+          echo "QEMU binfmt handlers installed."
+          docker buildx create --use
+          echo "Docker Buildx builder created and activated."
+
           echo "Iniciando build para múltiplas arquiteturas..."
           sudo docker buildx version
 
