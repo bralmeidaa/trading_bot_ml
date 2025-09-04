@@ -12,7 +12,7 @@
 #     - docs/*
 
 pool:
-  name: trading-bot-ml-vm
+  vmImage: 'ubuntu-latest'
 
 variables:
   # Azure DevOps Variables (set in pipeline variables)
@@ -37,6 +37,10 @@ stages:
     - checkout: self
       displayName: 'Checkout source code'
 
+    - task: DockerInstaller@0
+      inputs:
+        dockerVersion: '28.4.0'
+
     # VERSÃO NOVA (A SOLUÇÃO)
     - task: Bash@3
       displayName: 'Build multi-arch image with Buildx'
@@ -46,7 +50,6 @@ stages:
           echo "Iniciando build para múltiplas arquiteturas..."
           sudo docker buildx version
 
-          #O comando principal: constrói arm64
           sudo docker buildx build \
             --platform linux/arm64 \
             --tag $(imageRepository):$(dockerImageLatestTag) \
@@ -68,12 +71,6 @@ stages:
       displayName: 'List Docker Images'
       inputs:
         script: 'sudo docker image ls'
-    
-    # - task: PublishBuildArtifacts@1
-    #   displayName: 'Publish deployment scripts'
-    #   inputs:
-    #     pathToPublish: '$(System.DefaultWorkingDirectory)'
-    #     artifactName: 'deployment-files'
 
 - stage: Deploy
   displayName: 'Deploy to OCI VM'
@@ -90,19 +87,11 @@ stages:
     strategy:
       runOnce:
         deploy:
-          steps:
-          # - download: current
-          #   artifact: docker-image
-          #   displayName: 'Download Docker image'
-          
-          # - download: current
-          #   artifact: deployment-files
-          #   displayName: 'Download deployment files'
-          
+          steps:          
           - task: InstallSSHKey@0
             displayName: 'Install SSH key'
             inputs:
-              knownHostsEntry: '$(OCI_VM_IP) ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDIFAtu5iynRQ92QzhzxQEIQLz1VNCK0z+8yZzr+9Mt5DtvwlMkflMl/xhU6SrXWGHH4Iozg1ixjJRYSuOqu/z1/HC7+0RHC24MlpoLdXXW2QYuO+/oTql+dJFDcGVuZAkp9lSuP/CHzCF2Ydbm7wZVr4ypUBwqtaUlxpOjovPeWVveHkng64R8A7KH91euh+TTW7ZAkYmfSDnIltK6EJNQ+u2AEzfcJzLa4DO/pWGZRJSkFVUzwUu0jTa9Ys3TI58Srlyoy9KbldaerzY5gyOIDrbwjrU5NhmL22CqMVXIee69SAuAY9UzDqoBCep3/TklAASNghcHcCzU7Ij+UJO74nXD85w+k6nmmvQm4yubEVk8og0mjmtrEeBZHBNimirGc89GAOTwFakM9JKUO6l2FG1ml4f9nWpkHZeS3ESdwC0dZvqZOd/n7ofBaQXxBangujbD8Wqn8VX6xy54bVCZXlG/Tg1qXDX5UZCkGrErc+Aw2+ej5RgeGKZgYswI9B8=' # Replace with actual host key
+              knownHostsEntry: '$(OCI_VM_IP) $(OCI_SSH_HOST_KEY)'
               sshPublicKey: '$(OCI_SSH_PUBLIC_KEY)'
               sshKeySecureFile: 'OCI_VM_SSH_KEY.key'
           
@@ -118,7 +107,6 @@ stages:
                 # Copy files to OCI VM
                 #echo "📦 Copying files to OCI VM..."
                 scp -o StrictHostKeyChecking=no -r $(System.DefaultWorkingDirectory)/* $(OCI_VM_USER)@$(OCI_VM_IP):$(deploymentPath)/
-                #scp -o StrictHostKeyChecking=no $(Pipeline.Workspace)/docker-image/trading-bot-ml.tar $(OCI_VM_USER)@$(OCI_VM_IP):$(deploymentPath)/
                 
                 # Execute deployment script on OCI VM
                 echo "🔧 Executing deployment on OCI VM..."
@@ -134,10 +122,8 @@ stages:
                   
                   echo "📥 Loading new Docker image..."
                   sudo docker compose pull
-                  #sudo docker load -i trading-bot-ml.tar
 
                   echo "Deleting image file"
-                  #sudo rm trading-bot-ml.tar
                   
                   echo "🔧 Setting up environment..."
                   # Create .env file with secrets
