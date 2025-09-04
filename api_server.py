@@ -67,17 +67,17 @@ class ConfigUpdate(BaseModel):
     daily_loss_limit: float
     daily_profit_target: float
 
-# Mount static files
-app.mount("/static", StaticFiles(directory="frontend"), name="static")
+# Mount static files - serve React build
+app.mount("/static", StaticFiles(directory="frontend_react/dist"), name="static")
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
-    """Serve the main dashboard page."""
+    """Serve the React dashboard page."""
     try:
-        with open("frontend/index.html", "r", encoding="utf-8") as f:
+        with open("frontend_react/dist/index.html", "r", encoding="utf-8") as f:
             return HTMLResponse(content=f.read())
     except FileNotFoundError:
-        return HTMLResponse(content="<h1>Dashboard not found</h1>", status_code=404)
+        return HTMLResponse(content="<h1>React Dashboard not found - Run 'npm run build' in frontend_react/</h1>", status_code=404)
 
 @app.get("/api/status", response_model=SystemStatus)
 async def get_system_status():
@@ -362,8 +362,8 @@ def main():
     print("📊 Dashboard will be available at: http://localhost:8000")
     print("🔧 API documentation at: http://localhost:8000/docs")
     
-    # Ensure frontend directory exists
-    Path("frontend").mkdir(exist_ok=True)
+    # Ensure React build directory exists
+    Path("frontend_react/dist").mkdir(parents=True, exist_ok=True)
     
     # Run server
     uvicorn.run(
