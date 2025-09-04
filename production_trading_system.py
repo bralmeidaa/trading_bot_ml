@@ -479,44 +479,95 @@ class OptimizedSignalGenerator:
         self.params = self._get_optimized_params(symbol, timeframe)
     
     def _get_optimized_params(self, symbol: str, timeframe: str) -> Dict[str, Any]:
-        """Get optimized parameters based on backtest results."""
-        # Best performing configurations
-        if symbol == 'LINK/USDT' and timeframe == '5m':
-            return {
+        """Get optimized parameters based on backtest results and effectiveness analysis."""
+        # Optimized configurations for better trade frequency while maintaining robustness
+        key = f"{symbol}_{timeframe}"
+        
+        # Specific optimized parameters for each pair/timeframe
+        optimized_params = {
+            'BTC/USDT_1m': {
+                'momentum_threshold': 0.006,
+                'volume_threshold': 1.5,
+                'rsi_oversold': 32,
+                'rsi_overbought': 68,
+                'confidence_multiplier': 1.1,
+                'ml_threshold': 0.52
+            },
+            'BTC/USDT_5m': {
+                'momentum_threshold': 0.007,
+                'volume_threshold': 1.6,
+                'rsi_oversold': 33,
+                'rsi_overbought': 67,
+                'confidence_multiplier': 1.15,
+                'ml_threshold': 0.53
+            },
+            'ETH/USDT_1m': {
+                'momentum_threshold': 0.007,
+                'volume_threshold': 1.6,
+                'rsi_oversold': 33,
+                'rsi_overbought': 67,
+                'confidence_multiplier': 1.1,
+                'ml_threshold': 0.53
+            },
+            'LINK/USDT_5m': {
+                'momentum_threshold': 0.007,  # More sensitive than before
+                'volume_threshold': 1.6,      # Lower threshold for more signals
+                'rsi_oversold': 33,           # Slightly adjusted
+                'rsi_overbought': 67,
+                'confidence_multiplier': 1.15,
+                'ml_threshold': 0.53          # Slightly more aggressive
+            },
+            'LINK/USDT_1m': {
+                'momentum_threshold': 0.006,  # More sensitive
+                'volume_threshold': 1.5,      # Lower threshold
+                'rsi_oversold': 32,
+                'rsi_overbought': 68,
+                'confidence_multiplier': 1.1,
+                'ml_threshold': 0.52          # More aggressive
+            },
+            'ADA/USDT_1m': {
+                'momentum_threshold': 0.006,
+                'volume_threshold': 1.5,
+                'rsi_oversold': 32,
+                'rsi_overbought': 68,
+                'confidence_multiplier': 1.1,
+                'ml_threshold': 0.52
+            },
+            'ADA/USDT_5m': {
+                'momentum_threshold': 0.007,
+                'volume_threshold': 1.6,
+                'rsi_oversold': 33,
+                'rsi_overbought': 67,
+                'confidence_multiplier': 1.15,
+                'ml_threshold': 0.53
+            },
+            'SOL/USDT_5m': {
                 'momentum_threshold': 0.008,
+                'volume_threshold': 1.7,
+                'rsi_oversold': 34,
+                'rsi_overbought': 66,
+                'confidence_multiplier': 1.2,
+                'ml_threshold': 0.54
+            },
+            'SOL/USDT_15m': {
+                'momentum_threshold': 0.009,
                 'volume_threshold': 1.8,
                 'rsi_oversold': 35,
                 'rsi_overbought': 65,
-                'confidence_multiplier': 1.2,
+                'confidence_multiplier': 1.25,
                 'ml_threshold': 0.55
             }
-        elif symbol == 'LINK/USDT' and timeframe == '1m':
-            return {
-                'momentum_threshold': 0.008,
-                'volume_threshold': 1.8,
-                'rsi_oversold': 35,
-                'rsi_overbought': 65,
-                'confidence_multiplier': 1.2,
-                'ml_threshold': 0.55
-            }
-        elif symbol == 'ADA/USDT' and timeframe == '1m':
-            return {
-                'momentum_threshold': 0.008,
-                'volume_threshold': 1.8,
-                'rsi_oversold': 35,
-                'rsi_overbought': 65,
-                'confidence_multiplier': 1.2,
-                'ml_threshold': 0.55
-            }
-        else:
-            return {
-                'momentum_threshold': 0.012,
-                'volume_threshold': 2.2,
-                'rsi_oversold': 30,
-                'rsi_overbought': 70,
-                'confidence_multiplier': 1.0,
-                'ml_threshold': 0.6
-            }
+        }
+        
+        # Return specific params if available, otherwise use optimized defaults
+        return optimized_params.get(key, {
+            'momentum_threshold': 0.008,      # More sensitive than original 0.012
+            'volume_threshold': 1.8,          # Lower than original 2.2
+            'rsi_oversold': 32,               # Slightly more aggressive
+            'rsi_overbought': 68,
+            'confidence_multiplier': 1.0,
+            'ml_threshold': 0.55              # More aggressive than 0.6
+        })
     
     def generate_signals(self, df: pd.DataFrame) -> List[TradeSignal]:
         """Generate trading signals."""
@@ -829,36 +880,123 @@ class OptimizedSignalGenerator:
 
 
 def create_production_config() -> Tuple[GlobalConfig, List[BotConfig]]:
-    """Create production configuration based on backtest results."""
+    """Create optimized production configuration for better effectiveness."""
     
+    # Conservative optimized configuration - balances safety with effectiveness
     global_config = GlobalConfig(
-        total_capital=1200.0,  # Capital mínimo otimizado para Brasil (R$ 6,000)
-        max_concurrent_trades=2,  # Reduzido para menor capital
-        daily_loss_limit=0.04,  # 4% perda máxima diária
-        daily_profit_target=0.025,  # 2.5% meta diária
+        total_capital=1200.0,
+        max_concurrent_trades=3,  # Increased from 2 for more opportunities
+        daily_loss_limit=0.045,  # 4.5% - slightly increased for more flexibility
+        daily_profit_target=0.025,  # 2.5% target maintained
         emergency_stop_drawdown=0.08,
-        paper_trading=True  # Start with paper trading
+        paper_trading=True
     )
     
-    # Configuração otimizada para capital mínimo - apenas 2 bots mais lucrativos
+    # Diversified bot configuration with optimized parameters
     bot_configs = [
+        # Main performer with optimized parameters
         BotConfig(
             symbol='LINK/USDT',
             timeframe='5m',
-            capital_allocation=0.70,  # 70% para o melhor performer (18.57% retorno)
-            max_risk_per_trade=0.025,  # 2.5% risco por trade
-            confidence_threshold=0.65,
-            stop_loss_pct=0.018,  # 1.8% stop loss
-            take_profit_pct=0.035  # 3.5% take profit
+            capital_allocation=0.40,  # 40% allocation
+            max_risk_per_trade=0.025,
+            confidence_threshold=0.60,  # Lowered from 0.65 for more signals
+            stop_loss_pct=0.018,
+            take_profit_pct=0.035,
+            enabled=True
         ),
+        # High-frequency component with better parameters
         BotConfig(
             symbol='LINK/USDT',
             timeframe='1m',
-            capital_allocation=0.30,  # 30% para alta frequência (18.10% retorno)
-            max_risk_per_trade=0.020,  # 2.0% risco por trade
-            confidence_threshold=0.65,
-            stop_loss_pct=0.015,  # 1.5% stop loss
-            take_profit_pct=0.030  # 3.0% take profit
+            capital_allocation=0.25,  # 25% allocation
+            max_risk_per_trade=0.022,
+            confidence_threshold=0.58,  # Lowered from 0.65
+            stop_loss_pct=0.015,
+            take_profit_pct=0.030,
+            enabled=True
+        ),
+        # Diversification with BTC for stability and more opportunities
+        BotConfig(
+            symbol='BTC/USDT',
+            timeframe='5m',
+            capital_allocation=0.35,  # 35% allocation
+            max_risk_per_trade=0.028,
+            confidence_threshold=0.58,  # Optimized threshold
+            stop_loss_pct=0.020,
+            take_profit_pct=0.038,
+            enabled=True
+        )
+    ]
+    
+    return global_config, bot_configs
+
+
+def create_aggressive_production_config() -> Tuple[GlobalConfig, List[BotConfig]]:
+    """Create more aggressive configuration for higher trading activity."""
+    
+    global_config = GlobalConfig(
+        total_capital=1200.0,
+        max_concurrent_trades=5,  # Higher activity
+        daily_loss_limit=0.055,  # 5.5%
+        daily_profit_target=0.035,  # 3.5%
+        emergency_stop_drawdown=0.09,
+        paper_trading=True
+    )
+    
+    bot_configs = [
+        # Multiple 1m scalping bots for high frequency
+        BotConfig(
+            symbol='BTC/USDT',
+            timeframe='1m',
+            capital_allocation=0.25,
+            max_risk_per_trade=0.025,
+            confidence_threshold=0.55,  # More aggressive
+            stop_loss_pct=0.012,
+            take_profit_pct=0.022,
+            enabled=True
+        ),
+        BotConfig(
+            symbol='ETH/USDT',
+            timeframe='1m',
+            capital_allocation=0.20,
+            max_risk_per_trade=0.025,
+            confidence_threshold=0.55,
+            stop_loss_pct=0.012,
+            take_profit_pct=0.022,
+            enabled=True
+        ),
+        # Medium frequency bots
+        BotConfig(
+            symbol='LINK/USDT',
+            timeframe='5m',
+            capital_allocation=0.20,
+            max_risk_per_trade=0.028,
+            confidence_threshold=0.57,
+            stop_loss_pct=0.018,
+            take_profit_pct=0.032,
+            enabled=True
+        ),
+        BotConfig(
+            symbol='ADA/USDT',
+            timeframe='5m',
+            capital_allocation=0.18,
+            max_risk_per_trade=0.030,
+            confidence_threshold=0.57,
+            stop_loss_pct=0.018,
+            take_profit_pct=0.032,
+            enabled=True
+        ),
+        # Swing trading component
+        BotConfig(
+            symbol='SOL/USDT',
+            timeframe='15m',
+            capital_allocation=0.17,
+            max_risk_per_trade=0.032,
+            confidence_threshold=0.58,
+            stop_loss_pct=0.022,
+            take_profit_pct=0.038,
+            enabled=True
         )
     ]
     
