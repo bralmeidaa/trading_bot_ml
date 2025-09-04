@@ -60,3 +60,8 @@ class NotificationService {
 }
 
 export const notificationService = new NotificationService();
+
+// Convenience function for showing notifications
+export const showNotification = (message, type = 'info', duration = 5000) => {
+  return notificationService.notify(message, type, duration);
+};

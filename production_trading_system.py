@@ -13,6 +13,15 @@ from typing import Dict, List, Tuple, Any, Optional
 import time
 from dataclasses import dataclass, asdict
 from enum import Enum
+
+# Import enhanced logging and configuration management
+try:
+    from enhanced_logging import enhanced_logger, LogLevel, LogCategory
+    from config_manager import config_manager
+    ENHANCED_FEATURES = True
+except ImportError:
+    ENHANCED_FEATURES = False
+    print("Enhanced features not available - running in basic mode")
 import ccxt
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler

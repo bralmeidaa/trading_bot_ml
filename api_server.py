@@ -3,9 +3,9 @@
 API Server for Trading Bot ML Frontend
 Provides REST API endpoints for the dashboard frontend.
 """
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import json
@@ -17,6 +17,10 @@ from pathlib import Path
 
 # Import our trading system
 from production_trading_system import ProductionTradingSystem, GlobalConfig, BotConfig, create_production_config
+
+# Import configuration and logging systems
+from config_manager import config_manager
+from enhanced_logging import enhanced_logger, LogLevel, LogCategory
 
 app = FastAPI(title="Trading Bot ML API", version="1.0.0")
 
@@ -66,6 +70,42 @@ class ConfigUpdate(BaseModel):
     total_capital: float
     daily_loss_limit: float
     daily_profit_target: float
+
+# New models for enhanced configuration and logging
+class GlobalConfigUpdate(BaseModel):
+    total_capital: Optional[float] = None
+    max_concurrent_trades: Optional[int] = None
+    daily_loss_limit: Optional[float] = None
+    daily_profit_target: Optional[float] = None
+    emergency_stop_drawdown: Optional[float] = None
+    paper_trading: Optional[bool] = None
+
+class BotConfigUpdate(BaseModel):
+    capital_allocation: Optional[float] = None
+    max_risk_per_trade: Optional[float] = None
+    confidence_threshold: Optional[float] = None
+    stop_loss_pct: Optional[float] = None
+    take_profit_pct: Optional[float] = None
+    enabled: Optional[bool] = None
+
+class NewBotConfig(BaseModel):
+    symbol: str
+    timeframe: str
+    capital_allocation: float
+    max_risk_per_trade: float
+    confidence_threshold: float
+    stop_loss_pct: float
+    take_profit_pct: float
+    enabled: bool = True
+
+class LogFilter(BaseModel):
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    level: Optional[str] = None
+    category: Optional[str] = None
+    bot_id: Optional[str] = None
+    symbol: Optional[str] = None
+    limit: int = 1000
 
 # Mount static files - serve React build
 app.mount("/static", StaticFiles(directory="frontend_react/dist"), name="static")
@@ -345,6 +385,242 @@ async def health_check():
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "version": "1.0.0"
+    }
+
+# ============================================================================
+# ENHANCED CONFIGURATION MANAGEMENT ENDPOINTS
+# ============================================================================
+
+@app.get("/api/config/full")
+async def get_full_configuration():
+    """Get complete system configuration."""
+    try:
+        config_data = config_manager.get_configuration_dict()
+        enhanced_logger.log_api_request("/api/config/full", "GET")
+        return config_data
+    except Exception as e:
+        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.API, f"Error getting full config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/config/global")
+async def update_global_configuration(config: GlobalConfigUpdate):
+    """Update global configuration parameters."""
+    try:
+        updates = {k: v for k, v in config.dict().items() if v is not None}
+        success = config_manager.update_global_config(updates, "API User")
+        
+        if success:
+            enhanced_logger.log_config_change("global_update", updates, "API User")
+            return {"message": "Global configuration updated successfully", "updates": updates}
+        else:
+            raise HTTPException(status_code=400, detail="Failed to update global configuration")
+    except Exception as e:
+        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.CONFIG, f"Error updating global config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/config/bot/{bot_id}")
+async def update_bot_configuration(bot_id: str, config: BotConfigUpdate):
+    """Update specific bot configuration."""
+    try:
+        updates = {k: v for k, v in config.dict().items() if v is not None}
+        success = config_manager.update_bot_config(bot_id, updates, "API User")
+        
+        if success:
+            enhanced_logger.log_config_change("bot_update", {"bot_id": bot_id, **updates}, "API User")
+            return {"message": f"Bot {bot_id} configuration updated successfully", "updates": updates}
+        else:
+            raise HTTPException(status_code=400, detail=f"Failed to update bot {bot_id} configuration")
+    except Exception as e:
+        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.CONFIG, f"Error updating bot config {bot_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/config/bot")
+async def add_bot_configuration(config: NewBotConfig):
+    """Add new bot configuration."""
+    try:
+        bot_config = BotConfig(**config.dict())
+        success = config_manager.add_bot_config(bot_config, "API User")
+        
+        if success:
+            bot_id = f"{config.symbol}_{config.timeframe}"
+            enhanced_logger.log_config_change("bot_add", config.dict(), "API User")
+            return {"message": f"Bot {bot_id} added successfully"}
+        else:
+            raise HTTPException(status_code=400, detail="Failed to add bot configuration")
+    except Exception as e:
+        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.CONFIG, f"Error adding bot config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/config/bot/{bot_id}")
+async def remove_bot_configuration(bot_id: str):
+    """Remove bot configuration."""
+    try:
+        success = config_manager.remove_bot_config(bot_id, "API User")
+        
+        if success:
+            enhanced_logger.log_config_change("bot_remove", {"bot_id": bot_id}, "API User")
+            return {"message": f"Bot {bot_id} removed successfully"}
+        else:
+            raise HTTPException(status_code=404, detail=f"Bot {bot_id} not found")
+    except Exception as e:
+        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.CONFIG, f"Error removing bot config {bot_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/config/backups")
+async def get_configuration_backups():
+    """Get list of available configuration backups."""
+    try:
+        backups = config_manager.get_available_backups()
+        return {"backups": backups}
+    except Exception as e:
+        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.API, f"Error getting backups: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/config/restore/{backup_filename}")
+async def restore_configuration_backup(backup_filename: str):
+    """Restore configuration from backup."""
+    try:
+        success = config_manager.restore_backup(backup_filename, "API User")
+        
+        if success:
+            enhanced_logger.log_config_change("backup_restore", {"backup_file": backup_filename}, "API User")
+            return {"message": f"Configuration restored from {backup_filename}"}
+        else:
+            raise HTTPException(status_code=400, detail="Failed to restore backup")
+    except Exception as e:
+        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.CONFIG, f"Error restoring backup: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# ENHANCED LOGGING ENDPOINTS
+# ============================================================================
+
+@app.get("/api/logs/enhanced")
+async def get_enhanced_logs(
+    start_date: Optional[str] = Query(None, description="Start date (ISO format)"),
+    end_date: Optional[str] = Query(None, description="End date (ISO format)"),
+    level: Optional[str] = Query(None, description="Log level filter"),
+    category: Optional[str] = Query(None, description="Log category filter"),
+    bot_id: Optional[str] = Query(None, description="Bot ID filter"),
+    symbol: Optional[str] = Query(None, description="Symbol filter"),
+    limit: int = Query(1000, description="Maximum number of logs to return")
+):
+    """Get filtered enhanced logs."""
+    try:
+        # Parse dates
+        start_dt = datetime.fromisoformat(start_date) if start_date else None
+        end_dt = datetime.fromisoformat(end_date) if end_date else None
+        
+        # Parse enums
+        level_enum = LogLevel(level) if level else None
+        category_enum = LogCategory(category) if category else None
+        
+        logs = enhanced_logger.get_logs(
+            start_date=start_dt,
+            end_date=end_dt,
+            level=level_enum,
+            category=category_enum,
+            bot_id=bot_id,
+            symbol=symbol,
+            limit=limit
+        )
+        
+        # Convert to dict for JSON response
+        log_dicts = [
+            {
+                "timestamp": log.timestamp,
+                "level": log.level,
+                "category": log.category,
+                "message": log.message,
+                "data": log.data,
+                "bot_id": log.bot_id,
+                "symbol": log.symbol,
+                "trade_id": log.trade_id
+            }
+            for log in logs
+        ]
+        
+        enhanced_logger.log_api_request("/api/logs/enhanced", "GET", {
+            "filters": {
+                "start_date": start_date,
+                "end_date": end_date,
+                "level": level,
+                "category": category,
+                "bot_id": bot_id,
+                "symbol": symbol,
+                "limit": limit
+            },
+            "result_count": len(log_dicts)
+        })
+        
+        return {
+            "logs": log_dicts,
+            "total_count": len(log_dicts),
+            "filters_applied": {
+                "start_date": start_date,
+                "end_date": end_date,
+                "level": level,
+                "category": category,
+                "bot_id": bot_id,
+                "symbol": symbol,
+                "limit": limit
+            }
+        }
+        
+    except Exception as e:
+        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.API, f"Error getting enhanced logs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/logs/export")
+async def export_logs(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    format: str = "json"
+):
+    """Export logs to file."""
+    try:
+        # Parse dates
+        start_dt = datetime.fromisoformat(start_date) if start_date else None
+        end_dt = datetime.fromisoformat(end_date) if end_date else None
+        
+        # Export logs
+        export_path = enhanced_logger.export_logs(
+            start_date=start_dt,
+            end_date=end_dt,
+            format=format
+        )
+        
+        enhanced_logger.log_structured(LogLevel.INFO, LogCategory.API, 
+                                     f"Logs exported to {export_path}",
+                                     data={"format": format, "start_date": start_date, "end_date": end_date})
+        
+        # Return file for download
+        return FileResponse(
+            path=export_path,
+            filename=Path(export_path).name,
+            media_type='application/octet-stream'
+        )
+        
+    except Exception as e:
+        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.API, f"Error exporting logs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/logs/statistics")
+async def get_log_statistics():
+    """Get logging statistics."""
+    try:
+        stats = enhanced_logger.get_log_statistics()
+        return stats
+    except Exception as e:
+        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.API, f"Error getting log statistics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/logs/categories")
+async def get_log_categories():
+    """Get available log categories and levels."""
+    return {
+        "levels": [level.value for level in LogLevel],
+        "categories": [category.value for category in LogCategory]
     }
 
 # Error handlers

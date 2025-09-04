@@ -1,0 +1,52 @@
+[
+  {
+    "timestamp": "2025-09-04T21:09:13.087590",
+    "user": "System",
+    "changes": {
+      "global_config": {
+        "total_capital": 1200.0,
+        "max_concurrent_trades": 3,
+        "daily_loss_limit": 0.045,
+        "daily_profit_target": 0.025,
+        "emergency_stop_drawdown": 0.08,
+        "paper_trading": true
+      },
+      "bot_configs": [
+        {
+          "symbol": "LINK/USDT",
+          "timeframe": "5m",
+          "capital_allocation": 0.4,
+          "max_risk_per_trade": 0.025,
+          "confidence_threshold": 0.6,
+          "stop_loss_pct": 0.018,
+          "take_profit_pct": 0.035,
+          "enabled": true
+        },
+        {
+          "symbol": "LINK/USDT",
+          "timeframe": "1m",
+          "capital_allocation": 0.25,
+          "max_risk_per_trade": 0.022,
+          "confidence_threshold": 0.58,
+          "stop_loss_pct": 0.015,
+          "take_profit_pct": 0.03,
+          "enabled": true
+        },
+        {
+          "symbol": "BTC/USDT",
+          "timeframe": "5m",
+          "capital_allocation": 0.35,
+          "max_risk_per_trade": 0.028,
+          "confidence_threshold": 0.58,
+          "stop_loss_pct": 0.02,
+          "take_profit_pct": 0.038,
+          "enabled": true
+        }
+      ],
+      "last_updated": "2025-09-04T21:09:13.087271",
+      "updated_by": "System",
+      "update_reason": "Default configuration created"
+    },
+    "reason": "Default configuration created"
+  }
+]
