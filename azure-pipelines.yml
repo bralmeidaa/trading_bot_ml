@@ -41,13 +41,7 @@ stages:
     - task: DockerInstaller@0
       inputs:
         dockerVersion: '28.4.0'
-
-    
-
-
-
-  - job: BuildJob
-    steps:
+        
     # VERSÃO NOVA (A SOLUÇÃO)
     - task: Bash@3
       displayName: 'Set up QEMU and Docker Buildx'
@@ -58,7 +52,7 @@ stages:
           echo "QEMU binfmt handlers installed."
           sudo docker buildx create --use
           echo "Docker Buildx builder created and activated."
-          
+
     - task: Docker@2
       displayName: 'DockerLogin'
       inputs:
