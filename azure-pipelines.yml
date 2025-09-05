@@ -21,8 +21,9 @@ variables:
   dockerImageTag: '$(Build.BuildId)'
   dockerImageLatestTag: 'latest'
   deploymentPath: '/opt/trading-bot-ml'
-  registryUrl: 'registry-1.docker.io'
+  registryUrl: 'docker.io'
   imageRepository: 'bralmeida/trading-bot-ml'
+  imageName: 'docker.io/bralmeida/trading-bot-ml'
   dockerfilePath: './Dockerfile'
 
 
@@ -41,44 +42,59 @@ stages:
       inputs:
         dockerVersion: '28.4.0'
 
+    
+
+
+
+  - job: BuildJob
+    steps:
+    # VERSÃO NOVA (A SOLUÇÃO)
+    - task: Bash@3
+      displayName: 'Set up QEMU and Docker Buildx'
+      inputs:
+        targetType: 'inline'
+        script: |
+          sudo docker run --rm --privileged tonistiigi/binfmt --install all
+          echo "QEMU binfmt handlers installed."
+          sudo docker buildx create --use
+          echo "Docker Buildx builder created and activated."
+          
     - task: Docker@2
+      displayName: 'DockerLogin'
       inputs:
         containerRegistry: 'docker-account-bralmeida'
         command: 'login'
-    
-    # VERSÃO NOVA (A SOLUÇÃO)
+
     - task: Bash@3
       displayName: 'Build multi-arch image with Buildx'
       inputs:
         targetType: 'inline'
         script: |
-          docker run --rm --privileged tonistiigi/binfmt --install all
-          echo "QEMU binfmt handlers installed."
-          docker buildx create --use
-          echo "Docker Buildx builder created and activated."
-
           echo "Iniciando build para múltiplas arquiteturas..."
           sudo docker buildx version
 
           sudo docker buildx build \
             --platform linux/arm64 \
-            --tag $(imageRepository):$(dockerImageLatestTag) \
+            --tag '$(imageRepository):$(dockerImageLatestTag)' \
             --file $(dockerfilePath) \
-            --output=type=docker .
+            --cache-from "type=registry,ref=$(imageRepository):cache" \
+            --cache-to "type=registry,ref=$(imageRepository):cache,mode=max" \
+            --push .
           
           sudo docker image ls
           #sudo docker logout
-  
-    - task: Docker@2
-      displayName: 'Docker Push'
-      inputs:
-        containerRegistry: 'docker-account-bralmeida'
-        repository: $(imageRepository)
-        command: 'push'
-        tags: |
-          $(dockerImageLatestTag)
+
+    # - task: Docker@2
+    #   displayName: 'Docker Push'
+    #   inputs:
+    #     containerRegistry: 'docker-account-bralmeida'
+    #     repository: $(imageRepository)
+    #     command: 'push'
+    #     tags: |
+    #       $(dockerImageLatestTag)
 
     - task: Docker@2
+      displayName: 'DockerLogOut'
       inputs:
         containerRegistry: 'docker-account-bralmeida'
         command: 'logout'
@@ -87,14 +103,11 @@ stages:
   displayName: 'Deploy to OCI VM'
   dependsOn: Build
   condition: succeeded()
-  
+
   jobs:
   - deployment: DeployToOCI
     displayName: 'Deploy to OCI VM'
     environment: 'production'
-    # pool:
-    #   vmImage: 'ubuntu-latest'
-    
     strategy:
       runOnce:
         deploy:
@@ -105,7 +118,7 @@ stages:
               knownHostsEntry: '$(OCI_VM_IP) $(OCI_SSH_HOST_KEY)'
               sshPublicKey: '$(OCI_SSH_PUBLIC_KEY)'
               sshKeySecureFile: 'OCI_VM_SSH_KEY.key'
-          
+
           - task: Bash@3
             displayName: 'Deploy to OCI VM'
             inputs:
@@ -162,7 +175,7 @@ stages:
                 EOF
                 
                 echo "🎉 Deployment to OCI VM completed!"
-          
+
           - task: Bash@3
             displayName: 'Verify deployment'
             inputs:
@@ -197,13 +210,10 @@ stages:
   displayName: 'Rollback (Manual)'
   dependsOn: Deploy
   condition: failed()
-  
+
   jobs:
   - job: RollbackJob
     displayName: 'Rollback to Previous Version'
-    # pool:
-    #   vmImage: 'ubuntu-latest'
-    
     steps:
     - task: Bash@3
       displayName: 'Rollback deployment'
