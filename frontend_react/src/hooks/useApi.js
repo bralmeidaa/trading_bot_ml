@@ -44,16 +44,36 @@ export function useMetrics() {
   return useApi(() => apiService.getMetrics(), [], 5000);
 }
 
+//export function useEquity() {
+//  return useApi(() => apiService.getEquity(), [], 10000);
+//}
 export function useEquity() {
-  return useApi(() => apiService.getEquity(), [], 10000);
+  // 1. Pega o resultado completo do hook genérico
+  const { data, ...rest } = useApi(() => apiService.getEquity(), [], 10000);
+  
+  // 2. Retorna um novo objeto, substituindo 'data' pelo array desembrulhado
+  // O '...rest' mantém as outras propriedades (loading, error, etc.)
+  return { data: data?.equity_curve || [], ...rest };
 }
 
+//export function useBots() {
+//  return useApi(() => apiService.getBots(), [], 10000);
+//}
 export function useBots() {
-  return useApi(() => apiService.getBots(), [], 10000);
+  const { data, ...rest } = useApi(() => apiService.getBots(), [], 10000);
+  
+  // "Desembrulha" o array 'bots' de dentro do objeto 'data'
+  return { data: data?.bots || [], ...rest };
 }
 
+//export function useRecentTrades() {
+//  return useApi(() => apiService.getRecentTrades(), [], 10000);
+//}
 export function useRecentTrades() {
-  return useApi(() => apiService.getRecentTrades(), [], 10000);
+  const { data, ...rest } = useApi(() => apiService.getRecentTrades(), [], 10000);
+  
+  // "Desembrulha" o array 'trades' de dentro do objeto 'data'
+  return { data: data?.trades || [], ...rest };
 }
 
 export function useLogs() {

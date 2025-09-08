@@ -4,9 +4,6 @@ import PerformanceMetrics from './components/PerformanceMetrics';
 import EquityChart from './components/EquityChart';
 import BotStatusTable from './components/BotStatusTable';
 import TradesAndLogs from './components/TradesAndLogs';
-import ConfigurationPanel from './components/ConfigurationPanel';
-import EnhancedConfigPanel from './components/EnhancedConfigPanel';
-import LogViewer from './components/LogViewer';
 import Notifications from './components/Notifications';
 
 function App() {
@@ -26,9 +23,19 @@ function App() {
           </>
         );
       case 'config':
-        return <EnhancedConfigPanel />;
+        return (
+          <div className="bg-white rounded-lg shadow p-6">
+            <h2 className="text-xl font-semibold mb-4">Configuration</h2>
+            <p className="text-gray-600">Configuration panel coming soon...</p>
+          </div>
+        );
       case 'logs':
-        return <LogViewer />;
+        return (
+          <div className="bg-white rounded-lg shadow p-6">
+            <h2 className="text-xl font-semibold mb-4">Logs & Export</h2>
+            <p className="text-gray-600">Log viewer coming soon...</p>
+          </div>
+        );
       default:
         return null;
     }

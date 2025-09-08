@@ -140,9 +140,9 @@ export default function BotStatusTable() {
     );
   }
 
-  const activeBots = bots?.filter(bot => bot.enabled) || [];
-  const totalPnL = bots?.reduce((sum, bot) => sum + (bot.pnl || 0), 0) || 0;
-  const totalTrades = bots?.reduce((sum, bot) => sum + (bot.trades || 0), 0) || 0;
+  const activeBots = (Array.isArray(bots) ? bots : []).filter(bot => bot.enabled);
+  const totalPnL = (Array.isArray(bots) ? bots : []).reduce((sum, bot) => sum + (bot.pnl || 0), 0);
+  const totalTrades = (Array.isArray(bots) ? bots : []).reduce((sum, bot) => sum + (bot.trades || 0), 0);
 
   return (
     <div className="card mb-8">
@@ -244,8 +244,8 @@ export default function BotStatusTable() {
               <tr>
                 <td colSpan="6" className="px-6 py-8 text-center text-gray-500">
                   <Bot className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                  <p>No bots configured</p>
-                  <p className="text-sm">Configure your first trading bot to get started</p>
+                  <p>Waiting for bot data...</p>
+                  <p className="text-sm">Start the trading system to see bot status</p>
                 </td>
               </tr>
             )}

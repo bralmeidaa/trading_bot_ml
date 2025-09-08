@@ -221,8 +221,8 @@ export default function EquityChart() {
           <div className="h-full flex items-center justify-center text-gray-500">
             <div className="text-center">
               <TrendingUp className="h-12 w-12 mx-auto mb-2 opacity-50" />
-              <p>No equity data available</p>
-              <p className="text-sm">Start trading to see your equity curve</p>
+              <p>Waiting for equity data...</p>
+              <p className="text-sm">Your equity curve will appear here once trading begins</p>
             </div>
           </div>
         )}

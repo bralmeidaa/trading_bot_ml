@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Activity, FileText, TrendingUp, TrendingDown, AlertCircle, RefreshCw } from 'lucide-react';
-import { useRecentTrades, useLogs } from '../hooks/useApi';
+import { useRecentTrades } from '../hooks/useApi';
 import { formatCurrency, formatDateTime, getStatusColor } from '../utils/formatters';
 
 const TabButton = ({ active, onClick, children, icon: Icon }) => (
@@ -139,8 +139,8 @@ const RecentTrades = () => {
             <tr>
               <td colSpan="6" className="px-6 py-8 text-center text-gray-500">
                 <Activity className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                <p>No recent trades</p>
-                <p className="text-sm">Trades will appear here once the system starts trading</p>
+                <p>Waiting for trade data...</p>
+                <p className="text-sm">Recent trades will appear here once the system starts trading</p>
               </td>
             </tr>
           )}
@@ -151,66 +151,13 @@ const RecentTrades = () => {
 };
 
 const SystemLogs = () => {
-  const { data: logs, loading, error, refetch } = useLogs();
-
-  if (error) {
-    return (
-      <div className="text-center py-8">
-        <AlertCircle className="h-12 w-12 text-danger-500 mx-auto mb-4" />
-        <p className="text-danger-600">Failed to load logs: {error}</p>
-        <button
-          onClick={refetch}
-          className="mt-2 btn-secondary flex items-center space-x-2 mx-auto"
-        >
-          <RefreshCw className="h-4 w-4" />
-          <span>Retry</span>
-        </button>
-      </div>
-    );
-  }
-
-  if (loading) {
-    return (
-      <div className="animate-pulse space-y-2">
-        {[...Array(10)].map((_, i) => (
-          <div key={i} className="h-4 bg-gray-200 rounded w-full"></div>
-        ))}
-      </div>
-    );
-  }
-
-  const logLines = Array.isArray(logs) ? logs : (logs ? logs.split('\n') : []);
-
   return (
-    <div className="bg-gray-900 rounded-lg p-4 max-h-96 overflow-y-auto">
-      <pre className="text-sm text-gray-300 font-mono whitespace-pre-wrap">
-        {logLines.length > 0 ? (
-          logLines.map((line, index) => (
-            <div
-              key={index}
-              className={`${
-                line.includes('ERROR') || line.includes('CRITICAL')
-                  ? 'text-red-400'
-                  : line.includes('WARNING')
-                  ? 'text-yellow-400'
-                  : line.includes('INFO')
-                  ? 'text-blue-400'
-                  : line.includes('SUCCESS')
-                  ? 'text-green-400'
-                  : 'text-gray-300'
-              }`}
-            >
-              {line}
-            </div>
-          ))
-        ) : (
-          <div className="text-center text-gray-500 py-8">
-            <FileText className="h-12 w-12 mx-auto mb-4 opacity-50" />
-            <p>No logs available</p>
-            <p className="text-sm">System logs will appear here</p>
-          </div>
-        )}
-      </pre>
+    <div className="text-center py-8">
+      <FileText className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+      <p className="text-gray-600">System logs feature coming soon...</p>
+      <p className="text-sm text-gray-500 mt-2">
+        This will show real-time system logs and trading events.
+      </p>
     </div>
   );
 };

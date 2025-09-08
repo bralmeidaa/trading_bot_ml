@@ -61,8 +61,12 @@ const LogViewer = () => {
         }
       });
 
-      const response = await apiService.get(`/api/logs/enhanced?${params.toString()}`);
-      setLogs(response.logs || []);
+      const response = await apiService.get(`/logs/enhanced?${params.toString()}`);
+      if (response.success) {
+        setLogs(response.data.logs || []);
+      } else {
+        throw new Error(response.error);
+      }
     } catch (error) {
       showNotification('Failed to load logs', 'error');
       console.error('Error loading logs:', error);
@@ -73,8 +77,10 @@ const LogViewer = () => {
 
   const loadStatistics = async () => {
     try {
-      const response = await apiService.get('/api/logs/statistics');
-      setStatistics(response);
+      const response = await apiService.get('/logs/statistics');
+      if (response.success) {
+        setStatistics(response.data);
+      }
     } catch (error) {
       console.error('Error loading log statistics:', error);
     }
@@ -82,8 +88,10 @@ const LogViewer = () => {
 
   const loadCategories = async () => {
     try {
-      const response = await apiService.get('/api/logs/categories');
-      setCategories(response);
+      const response = await apiService.get('/logs/categories');
+      if (response.success) {
+        setCategories(response.data);
+      }
     } catch (error) {
       console.error('Error loading log categories:', error);
     }
@@ -148,11 +156,11 @@ const LogViewer = () => {
   };
 
   // Filter logs by search term
-  const filteredLogs = logs.filter(log => {
+  const filteredLogs = (Array.isArray(logs) ? logs : []).filter(log => {
     if (!searchTerm) return true;
     const searchLower = searchTerm.toLowerCase();
     return (
-      log.message.toLowerCase().includes(searchLower) ||
+      log.message?.toLowerCase().includes(searchLower) ||
       (log.bot_id && log.bot_id.toLowerCase().includes(searchLower)) ||
       (log.symbol && log.symbol.toLowerCase().includes(searchLower)) ||
       (log.trade_id && log.trade_id.toLowerCase().includes(searchLower))

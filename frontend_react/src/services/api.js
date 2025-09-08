@@ -26,6 +26,11 @@ class ApiService {
     }
   }
 
+  // Convenience method for GET requests
+  async get(endpoint) {
+    return this.request(endpoint, { method: 'GET' });
+  }
+
   // System Status
   async getSystemStatus() {
     return this.request('/status');

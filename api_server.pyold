@@ -108,7 +108,16 @@ class LogFilter(BaseModel):
     limit: int = 1000
 
 # Mount static files - serve React build
-#app.mount("/", StaticFiles(directory="frontend_react/dist", html=True), name="static")
+app.mount("/static", StaticFiles(directory="frontend_react/dist"), name="static")
+
+@app.get("/", response_class=HTMLResponse)
+async def read_root():
+    """Serve the React dashboard page."""
+    try:
+        with open("frontend_react/dist/index.html", "r", encoding="utf-8") as f:
+            return HTMLResponse(content=f.read())
+    except FileNotFoundError:
+        return HTMLResponse(content="<h1>React Dashboard not found - Run 'npm run build' in frontend_react/</h1>", status_code=404)
 
 @app.get("/api/status", response_model=SystemStatus)
 async def get_system_status():
@@ -202,8 +211,15 @@ async def get_bot_status():
         
         return {"bots": bots}
     
-    # Return empty data when system is not running
-    return {"bots": []}
+    # Return demo data
+    return {
+        "bots": [
+            BotStatus(symbol="LINK/USDT", timeframe="5m", status="running", pnl=156.78, trades=3, enabled=True),
+            BotStatus(symbol="LINK/USDT", timeframe="1m", status="running", pnl=89.45, trades=8, enabled=True),
+            BotStatus(symbol="ADA/USDT", timeframe="1m", status="running", pnl=234.12, trades=5, enabled=True),
+            BotStatus(symbol="ADA/USDT", timeframe="5m", status="paused", pnl=-45.67, trades=2, enabled=False)
+        ]
+    }
 
 @app.get("/api/trades/recent", response_model=Dict[str, List[TradeInfo]])
 async def get_recent_trades():
@@ -227,8 +243,16 @@ async def get_recent_trades():
         
         return {"trades": trades}
     
-    # Return empty data when system is not running
-    return {"trades": []}
+    # Return demo data
+    return {
+        "trades": [
+            TradeInfo(symbol="LINK/USDT", direction="LONG", pnl=45.67, status="closed", time="10:30"),
+            TradeInfo(symbol="ADA/USDT", direction="SHORT", pnl=-23.45, status="closed", time="10:15"),
+            TradeInfo(symbol="LINK/USDT", direction="LONG", pnl=78.90, status="open", time="10:00"),
+            TradeInfo(symbol="ADA/USDT", direction="LONG", pnl=34.56, status="closed", time="09:45"),
+            TradeInfo(symbol="LINK/USDT", direction="SHORT", pnl=-12.34, status="closed", time="09:30")
+        ]
+    }
 
 @app.get("/api/equity", response_model=Dict[str, List[EquityPoint]])
 async def get_equity_curve():
@@ -242,8 +266,17 @@ async def get_equity_curve():
         ]
         return {"equity_curve": equity_points}
     
-    # Return empty data when system is not running
-    return {"equity_curve": []}
+    # Return demo data
+    now = datetime.now()
+    equity_points = []
+    equity = 10000.0
+    
+    for i in range(50):
+        timestamp = int((now - timedelta(minutes=i*5)).timestamp() * 1000)
+        equity += (0.5 - __import__('random').random()) * 50
+        equity_points.append(EquityPoint(timestamp=timestamp, equity=max(equity, 9000)))
+    
+    return {"equity_curve": list(reversed(equity_points))}
 
 @app.post("/api/start")
 async def start_system(background_tasks: BackgroundTasks):
@@ -598,10 +631,6 @@ async def not_found_handler(request, exc):
 @app.exception_handler(500)
 async def internal_error_handler(request, exc):
     return {"error": "Internal server error"}
-
-
-# Mount static files - serve React build
-app.mount("/", StaticFiles(directory="frontend_react/dist", html=True), name="static")
 
 def main():
     """Run the API server."""

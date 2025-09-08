@@ -29,7 +29,7 @@ COPY . .
 
 # Build React frontend
 WORKDIR /app/frontend_react
-RUN npm ci --only=production && npm run build
+RUN npm ci && npm run build
 
 # Return to app directory
 WORKDIR /app

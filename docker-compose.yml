@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   trading-bot:
     image: bralmeida/trading-bot-ml:latest
@@ -11,10 +9,10 @@ services:
       - PYTHONUNBUFFERED=1
       - BINANCE_API_KEY=${BINANCE_API_KEY:-}
       - BINANCE_API_SECRET=${BINANCE_API_SECRET:-}
-    volumes:
-      - ./logs:/app/logs
-      - ./data:/app/data
-      - ./config:/app/config
+        #volumes:
+      #  - trading-bot-logs:/app/logs
+        #  - trading-bot-data:/app/data
+        #  - trading-bot-config:/app/config
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]

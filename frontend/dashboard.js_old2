@@ -1,0 +1,200 @@
+001|// Dashboard JavaScript for Trading Bot ML
+002|class TradingDashboard {
+003|    constructor() {
+004|        this.apiUrl = '/api';
+005|        this.equityChart = null;
+006|        this.systemRunning = true;
+007|        this.refreshInterval = null;
+008|        
+009|        this.init();
+010|    }
+011|    
+012|    init() {
+013|        this.initializeCharts();
+014|        this.loadInitialData();
+015|        this.startAutoRefresh();
+016|        this.setupEventListeners();
+017|    }
+018|    
+019|    initializeCharts() {
+020|        const ctx = document.getElementById('equityChart').getContext('2d');
+021|        this.equityChart = new Chart(ctx, {
+022|            type: 'line',
+023|            data: {
+024|                labels: [],
+025|                datasets: [{
+026|                    label: 'Equity ($)',
+027|                    data: [],
+028|                    borderColor: '#667eea',
+029|                    backgroundColor: 'rgba(102, 126, 234, 0.1)',
+030|                    borderWidth: 2,
+031|                    fill: true,
+032|                    tension: 0.4
+033|                }]
+034|            },
+035|            options: {
+036|                responsive: true,
+037|                maintainAspectRatio: false,
+038|                scales: {
+039|                    y: {
+040|                        beginAtZero: false,
+041|                        ticks: {
+042|                            callback: function(value) {
+043|                                return '$' + value.toLocaleString();
+044|                            }
+045|                        }
+046|                    },
+047|                    x: {
+048|                        type: 'time',
+049|                        time: {
+050|                            unit: 'minute'
+051|                        }
+052|                    }
+053|                },
+054|                plugins: {
+055|                    legend: {
+056|                        display: false
+057|                    },
+058|                    tooltip: {
+059|                        callbacks: {
+060|                            label: function(context) {
+061|                                return 'Equity: $' + context.parsed.y.toLocaleString();
+062|                            }
+063|                        }
+064|                    }
+065|                }
+066|            }
+067|        });
+068|    }
+069|    
+070|    async loadInitialData() {
+071|        try {
+072|            this.showLoadingIndicator();
+073|            await this.updateSystemStatus();
+074|            await this.updatePerformanceMetrics();
+075|            await this.updateBotStatus();
+076|            await this.updateRecentTrades();
+077|            await this.updateEquityChart();
+078|        } catch (error) {
+079|            console.error('Error loading initial data:', error);
+080|            this.showNotification('Erro ao carregar dados iniciais', 'error');
+081|        } finally {
+082|            this.hideLoadingIndicator();
+083|        }
+084|    }
+085|    
+086|    async updateSystemStatus() {
+087|        try {
+088|            const response = await fetch(`${this.apiUrl}/status`);
+089|            if (!response.ok) throw new Error('Failed to fetch system status');
+090|            const data = await response.json();
+091|            
+092|            const statusElement = document.getElementById('system-status');
+093|            if (data.running) {
+094|                statusElement.innerHTML = '<i class="fas fa-circle status-running"></i> Online';
+095|                this.systemRunning = true;
+096|            } else {
+097|                statusElement.innerHTML = '<i class="fas fa-circle status-stopped"></i> Offline';
+098|                this.systemRunning = false;
+099|            }
+100|        } catch (error) {
+101|            console.error('Error updating system status:', error);
+102|            this.simulateSystemStatus();
+103|        }
+104|    }
+105|    
+106|    async updatePerformanceMetrics() {
+107|        try {
+108|            const response = await fetch(`${this.apiUrl}/metrics`);
+109|            if (!response.ok) throw new Error('Failed to fetch performance metrics');
+110|            const data = await response.json();
+111|            
+112|            document.getElementById('total-pnl').textContent = `$${data.total_pnl.toFixed(2)}`;
+113|            document.getElementById('total-roi').textContent = `${(data.total_roi * 100).toFixed(2)}%`;
+114|            document.getElementById('daily-pnl').textContent = `$${data.daily_pnl.toFixed(2)}`;
+115|            document.getElementById('active-trades').textContent = data.active_trades;
+116|            document.getElementById('win-rate').textContent = `${(data.win_rate * 100).toFixed(1)}%`;
+117|            
+118|            this.updateMetricColors(data);
+119|        } catch (error) {
+120|            console.error('Error updating performance metrics:', error);
+121|            this.simulatePerformanceMetrics();
+122|        }
+123|    }
+124|    
+125|    async updateBotStatus() {
+126|        try {
+127|            const response = await fetch(`${this.apiUrl}/bots`);
+128|            if (!response.ok) throw new Error('Failed to fetch bot status');
+129|            const data = await response.json();
+130|            
+131|            const botStatusContainer = document.getElementById('bot-status');
+132|            botStatusContainer.innerHTML = '';
+133|            
+134|            data.bots.forEach(bot => {
+135|                const botElement = this.createBotStatusElement(bot);
+136|                botStatusContainer.appendChild(botElement);
+137|            });
+138|        } catch (error) {
+139|            console.error('Error updating bot status:', error);
+140|            this.simulateBotStatus();
+141|        }
+142|    }
+143|    
+144|    async updateRecentTrades() {
+145|        try {
+146|            const response = await fetch(`${this.apiUrl}/trades/recent`);
+147|            if (!response.ok) throw new Error('Failed to fetch recent trades');
+148|            const data = await response.json();
+149|            
+150|            const tradesTable = document.getElementById('trades-table');
+151|            tradesTable.innerHTML = '';
+152|            
+153|            data.trades.forEach(trade => {
+154|                const row = this.createTradeRow(trade);
+155|                tradesTable.appendChild(row);
+156|            });
+157|        } catch (error) {
+158|            console.error('Error updating recent trades:', error);
+159|            this.simulateRecentTrades();
+160|        }
+161|    }
+162|    
+163|    async updateEquityChart() {
+164|        try {
+165|            const response = await fetch(`${this.apiUrl}/equity`);
+166|            if (!response.ok) throw new Error('Failed to fetch equity chart data');
+167|            const data = await response.json();
+168|            
+169|            const labels = data.equity_curve.map(point => new Date(point.timestamp));
+170|            const values = data.equity_curve.map(point => point.equity);
+171|            
+172|            this.equityChart.data.labels = labels;
+173|            this.equityChart.data.datasets[0].data = values;
+174|            this.equityChart.update();
+175|        } catch (error) {
+176|            console.error('Error updating equity chart:', error);
+177|            this.simulateEquityChart();
+178|        }
+179|    }
+180|    
+181|    showLoadingIndicator() {
+182|        const loadingIndicator = document.getElementById('loading-indicator');
+183|        if (loadingIndicator) {
+184|            loadingIndicator.style.display = 'block';
+185|        }
+186|    }
+187|    
+188|    hideLoadingIndicator() {
+189|        const loadingIndicator = document.getElementById('loading-indicator');
+190|        if (loadingIndicator) {
+191|            loadingIndicator.style.display = 'none';
+192|        }
+193|    }
+194|}
+195|
+196|// Initialize dashboard when page loads
+197|let dashboard;
+198|document.addEventListener('DOMContentLoaded', () => {
+199|    dashboard = new TradingDashboard();
+200|});
