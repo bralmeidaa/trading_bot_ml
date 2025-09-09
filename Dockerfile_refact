@@ -3,13 +3,21 @@
 FROM python:3.12 AS builder
 
 # Instala as ferramentas de sistema e Node.js
-RUN apt-get update && apt-get install -y nodejs npm && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y \
+    nodejs npm \
+    build-essential \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
+# Atualiza pip para a versão mais recente
+RUN pip install --upgrade pip
+
 # Instala dependências Python
 COPY requirements.txt .
-RUN pip install --prefix="/install" -r requirements.txt
+RUN pip install --prefix="/install" --no-cache-dir -r requirements.txt
 
 # Instala dependências do frontend e faz o build
 WORKDIR /app/frontend_react
@@ -31,6 +39,8 @@ FROM python:3.12-slim
 # Instala APENAS as dependências de RUNTIME necessárias
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
+    libgfortran5 \
+    libopenblas0 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -51,7 +61,8 @@ USER tradingbot
 
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
-EXPOSE 8000
-HEALTHCHECK CMD curl -f http://localhost:8000/api/health || exit 1
+EXPOSE 12000
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:12000/api/health || exit 1
 
-CMD ["python", "api_server.py"]
+CMD ["python", "-m", "uvicorn", "api_server:app", "--host", "0.0.0.0", "--port", "12000"]
