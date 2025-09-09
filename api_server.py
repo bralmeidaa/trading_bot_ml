@@ -590,6 +590,44 @@ async def get_log_categories():
         "categories": [category.value for category in LogCategory]
     }
 
+@app.post("/api/backtest")
+async def run_backtest():
+    """Run backtest analysis using the optimized configuration test."""
+    try:
+        import subprocess
+        import sys
+        
+        # Run the test_optimized_config.py script
+        result = subprocess.run(
+            [sys.executable, "test_optimized_config.py"],
+            capture_output=True,
+            text=True,
+            cwd="/workspace/trading_bot_ml"
+        )
+        
+        if result.returncode == 0:
+            return {
+                "success": True,
+                "output": result.stdout,
+                "analysis_complete": True,
+                "recommendations": [
+                    "START with Conservative Optimized configuration",
+                    "MONITOR trade frequency (target: 5-10 trades/day)",
+                    "SCALE UP to Balanced/Aggressive if performance is good",
+                    "MAINTAIN strict risk management protocols",
+                    "REVIEW and adjust parameters weekly based on results"
+                ]
+            }
+        else:
+            return {
+                "success": False,
+                "error": result.stderr,
+                "output": result.stdout
+            }
+    except Exception as e:
+        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.API, f"Error running backtest: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # Error handlers
 @app.exception_handler(404)
 async def not_found_handler(request, exc):

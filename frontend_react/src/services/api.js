@@ -87,13 +87,20 @@ class ApiService {
 
   // Configuration
   async getConfig() {
-    return this.request('/config');
+    return this.request('/config/full');
   }
 
   async updateConfig(config) {
     return this.request('/config', {
       method: 'POST',
       body: JSON.stringify(config),
+    });
+  }
+
+  // Backtest
+  async runBacktest() {
+    return this.request('/backtest', {
+      method: 'POST',
     });
   }
 

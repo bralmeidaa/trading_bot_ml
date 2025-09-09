@@ -145,18 +145,22 @@ export default function ConfigurationPanel() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (config) {
+    if (config && config.global_config) {
+      const globalConfig = config.global_config;
       setFormData({
-        trading_mode: config.paper_trading ? 'paper' : 'live',
-        total_capital: config.total_capital || 1200,
-        daily_loss_limit: (config.daily_loss_limit || 0.04) * 100,
-        daily_profit_target: (config.daily_profit_target || 0.025) * 100,
-        max_concurrent_trades: config.max_concurrent_trades || 2,
-        emergency_stop_drawdown: (config.emergency_stop_drawdown || 0.08) * 100,
+        trading_mode: globalConfig.paper_trading ? 'paper' : 'live',
+        total_capital: globalConfig.total_capital || 1200,
+        daily_loss_limit: (globalConfig.daily_loss_limit || 0.04) * 100,
+        daily_profit_target: (globalConfig.daily_profit_target || 0.025) * 100,
+        max_concurrent_trades: globalConfig.max_concurrent_trades || 2,
+        emergency_stop_drawdown: (globalConfig.emergency_stop_drawdown || 0.08) * 100,
       });
       
       if (config.bot_configs) {
-        setBotConfigs(config.bot_configs);
+        setBotConfigs(config.bot_configs.map((bot, index) => ({
+          ...bot,
+          id: bot.id || `${bot.symbol}_${bot.timeframe}_${index}`
+        })));
       }
     }
   }, [config]);

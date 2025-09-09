@@ -136,9 +136,53 @@ class ProductionTradingSystem:
         logger.info(f"Paper Trading: {global_config.paper_trading}")
         logger.info(f"Total Capital: ${global_config.total_capital:,.2f}")
     
+    async def _initialize_bots(self):
+        """Initialize bots with sufficient historical data."""
+        logger.info("📊 Initializing bots with historical data...")
+        
+        for bot_id, config in self.bot_configs.items():
+            if not config.enabled:
+                continue
+                
+            try:
+                # Fetch extended historical data for initialization
+                ohlcv = self.exchange.fetch_ohlcv(config.symbol, config.timeframe, limit=500)
+                if not ohlcv or len(ohlcv) < 100:
+                    logger.warning(f"⚠️ Insufficient data for {config.symbol} - disabling bot")
+                    config.enabled = False
+                    continue
+                
+                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                
+                # Initialize signal generator with historical data
+                signal_generator = self.signal_generators[bot_id]
+                df_with_indicators = signal_generator._add_indicators(df)
+                
+                # Check if indicators are properly calculated
+                latest_row = df_with_indicators.iloc[-1]
+                required_indicators = ['sma_20', 'ema_8', 'ema_21', 'rsi', 'bb_upper', 'bb_lower', 'atr']
+                
+                if any(pd.isna(latest_row[indicator]) for indicator in required_indicators):
+                    logger.warning(f"⚠️ Indicators not ready for {config.symbol} - will retry during operation")
+                else:
+                    logger.info(f"✅ {config.symbol} initialized with {len(df)} periods - indicators ready")
+                    
+                    # Pre-train ML model if possible
+                    signal_generator._update_model(df_with_indicators)
+                    
+            except Exception as e:
+                logger.error(f"❌ Failed to initialize {config.symbol}: {e}")
+                config.enabled = False
+        
+        enabled_bots = sum(1 for config in self.bot_configs.values() if config.enabled)
+        logger.info(f"🤖 {enabled_bots}/{len(self.bot_configs)} bots initialized successfully")
+
     async def start(self):
         """Start the trading system."""
         logger.info("🚀 Starting Production Trading System...")
+        
+        # Initialize bots with historical data
+        await self._initialize_bots()
         
         try:
             while True:
@@ -179,13 +223,22 @@ class ProductionTradingSystem:
     async def _process_bot(self, bot_id: str, config: BotConfig):
         """Process individual bot logic."""
         try:
-            # Get current market data
-            ohlcv = self.exchange.fetch_ohlcv(config.symbol, config.timeframe, limit=200)
+            # Get current market data with sufficient history for indicators
+            # We need at least 50 periods for reliable signals, but fetch more for better indicator calculation
+            ohlcv = self.exchange.fetch_ohlcv(config.symbol, config.timeframe, limit=300)
             if not ohlcv or len(ohlcv) < 100:
+                if ENHANCED_FEATURES:
+                    enhanced_logger.log(LogLevel.WARNING, LogCategory.TRADING, 
+                                      f"Insufficient historical data for {config.symbol} - got {len(ohlcv) if ohlcv else 0} periods")
                 return
             
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             current_price = df.iloc[-1]['close']
+            
+            # Log data quality for monitoring
+            if ENHANCED_FEATURES:
+                enhanced_logger.log(LogLevel.DEBUG, LogCategory.TRADING, 
+                                  f"Loaded {len(df)} periods for {config.symbol} - latest price: ${current_price:.4f}")
             
             # Generate signals
             signal_generator = self.signal_generators[bot_id]
@@ -590,10 +643,18 @@ class OptimizedSignalGenerator:
             # Generate signals
             signals = []
             
+            # Ensure we have enough data and indicators are properly calculated
             if len(df) < 50:
                 return signals
             
+            # Check if key indicators are available (not NaN) in the latest row
             latest_row = df.iloc[-1]
+            required_indicators = ['sma_20', 'ema_8', 'ema_21', 'rsi', 'bb_upper', 'bb_lower', 'atr']
+            
+            if any(pd.isna(latest_row[indicator]) for indicator in required_indicators):
+                # Skip this iteration if indicators are not ready
+                return signals
+            
             current_price = latest_row['close']
             
             # Generate different types of signals
