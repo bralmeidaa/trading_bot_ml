@@ -103,7 +103,7 @@ stages:
   jobs:
   - deployment: DeployToOCI
     displayName: 'Deploy to OCI VM'
-    environment: 'production'  
+    environment: 'pre-production'  
     strategy:
       runOnce:
         deploy:
