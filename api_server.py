@@ -137,7 +137,18 @@ class LogFilter(BaseModel):
     limit: int = 1000
 
 # Mount static files - serve React build
-#app.mount("/", StaticFiles(directory="frontend_react/dist", html=True), name="static")
+# Ensure React build directory exists first
+Path("frontend_react/dist").mkdir(parents=True, exist_ok=True)
+
+# Mount static files only if dist directory exists and has content
+try:
+    if Path("frontend_react/dist/index.html").exists():
+        app.mount("/", StaticFiles(directory="frontend_react/dist", html=True), name="static")
+    else:
+        print("⚠️  Frontend build not found. API-only mode.")
+except RuntimeError as e:
+    print(f"⚠️  Could not mount static files: {e}. API-only mode.")
+    pass
 
 @app.get("/api/status", response_model=SystemStatus)
 async def get_system_status():
