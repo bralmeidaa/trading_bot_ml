@@ -134,7 +134,7 @@ stages:
                 echo "🔍 Verifying deployment..."
                 
                 # Test API endpoint
-                response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:12000/api/health ||# exit 1)
+                response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:12000/api/health || echo "000")
                 
                 if [ $response -eq 200 ]; then
                   echo "✅ API health check passed"
