@@ -45,12 +45,22 @@ stages:
 
           sudo docker system prune -f
 
+    - task: Bash@3
+      displayName: 'Clean deployment folder'
+      inputs:
+        targetType: 'inline'
+        workingDirectory: '$(deploymentPath)'
+        script: | 
+          sudo rm -r /opt/trading-bot-ml/* || true
+
+          sudo rm -r /opt/trading_bot_ml || true
+
     - task: CopyFiles@2
       inputs:
         SourceFolder: '$(System.DefaultWorkingDirectory)'
         Contents: '**'
         TargetFolder: '$(deploymentPath)'
-        CleanTargetFolder: true
+        CleanTargetFolder: false
         OverWrite: true
         ignoreMakeDirErrors: true
 
