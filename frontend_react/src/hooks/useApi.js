@@ -77,7 +77,10 @@ export function useRecentTrades() {
 }
 
 export function useLogs() {
-  return useApi(() => apiService.getLogs(), [], 5000);
+  const { data, ...rest } = useApi(() => apiService.getLogs(), [], 5000);
+  
+  // "Desembrulha" o array 'logs' de dentro do objeto 'data'
+  return { data: data?.logs || [], ...rest };
 }
 
 export function useConfig() {

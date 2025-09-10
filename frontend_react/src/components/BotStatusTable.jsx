@@ -4,6 +4,7 @@ import { useBots } from '../hooks/useApi';
 import { apiService } from '../services/api';
 import { notificationService } from '../utils/notifications';
 import { formatCurrency, formatNumber, getStatusColor } from '../utils/formatters';
+import BotConfigModal from './BotConfigModal';
 
 const StatusBadge = ({ status }) => {
   const colorClass = getStatusColor(status);
@@ -96,11 +97,21 @@ const BotRow = ({ bot, onToggle, onConfigure }) => {
 export default function BotStatusTable() {
   const { data: bots, loading, error, refetch } = useBots();
   const [selectedBot, setSelectedBot] = useState(null);
+  const [showConfigModal, setShowConfigModal] = useState(false);
 
   const handleConfigure = (bot) => {
     setSelectedBot(bot);
-    // TODO: Open configuration modal
-    notificationService.info(`Configuration for ${bot.symbol} - Coming soon!`);
+    setShowConfigModal(true);
+  };
+
+  const handleConfigSave = (updatedConfig) => {
+    // Refresh the bots data after configuration update
+    refetch();
+  };
+
+  const handleCloseModal = () => {
+    setShowConfigModal(false);
+    setSelectedBot(null);
   };
 
   if (error) {
@@ -252,6 +263,14 @@ export default function BotStatusTable() {
           </tbody>
         </table>
       </div>
+
+      {/* Configuration Modal */}
+      <BotConfigModal
+        bot={selectedBot}
+        isOpen={showConfigModal}
+        onClose={handleCloseModal}
+        onSave={handleConfigSave}
+      />
     </div>
   );
 }

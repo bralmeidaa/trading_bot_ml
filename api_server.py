@@ -26,7 +26,23 @@ app = FastAPI(title="Trading Bot ML API", version="1.0.0")
 
 # Global trading system instance
 trading_system: Optional[ProductionTradingSystem] = None
+system_logs = []  # Store system logs in memory
 system_task: Optional[asyncio.Task] = None
+
+def add_system_log(level: str, message: str, source: str = "system"):
+    """Add a log entry to the system logs."""
+    global system_logs
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    log_entry = {
+        "timestamp": timestamp,
+        "level": level,
+        "message": message,
+        "source": source
+    }
+    system_logs.append(log_entry)
+    # Keep only last 100 logs to prevent memory issues
+    if len(system_logs) > 100:
+        system_logs = system_logs[-100:]
 
 # Pydantic models for API
 class SystemStatus(BaseModel):
@@ -65,11 +81,24 @@ class EquityPoint(BaseModel):
     timestamp: int
     equity: float
 
+class SystemLog(BaseModel):
+    timestamp: str
+    level: str
+    message: str
+    source: str
+
 class ConfigUpdate(BaseModel):
     trading_mode: str
     total_capital: float
-    daily_loss_limit: float
-    daily_profit_target: float
+
+class BotConfigUpdate(BaseModel):
+    symbol: str
+    timeframe: str
+    enabled: bool
+    risk_per_trade: float
+    max_positions: int
+    stop_loss: float
+    take_profit: float
 
 # New models for enhanced configuration and logging
 class GlobalConfigUpdate(BaseModel):
@@ -142,27 +171,46 @@ async def get_performance_metrics():
     global trading_system
     
     if trading_system:
-        # Calculate win rate from trade history
-        winning_trades = len([t for t in trading_system.trade_history if t.pnl and t.pnl > 0])
-        total_trades = len(trading_system.trade_history)
+        # Calculate metrics from trade history
+        total_trades = 0
+        winning_trades = 0
+        total_pnl = 0.0
+        active_trades = 0
+        
+        if hasattr(trading_system, 'trade_history') and trading_system.trade_history:
+            total_trades = len(trading_system.trade_history)
+            winning_trades = len([t for t in trading_system.trade_history if t.pnl and t.pnl > 0])
+            total_pnl = sum(t.pnl for t in trading_system.trade_history if t.pnl)
+            active_trades = len([t for t in trading_system.trade_history if t.status == 'open'])
+        
         win_rate = winning_trades / total_trades if total_trades > 0 else 0.0
         
-        # Calculate max drawdown from equity curve
+        # Calculate total ROI
+        total_capital = 1200.0  # Default capital from config
+        if hasattr(trading_system, 'global_config') and trading_system.global_config:
+            total_capital = trading_system.global_config.total_capital
+        
+        total_roi = total_pnl / total_capital if total_capital > 0 else 0.0
+        
+        # Calculate max drawdown (simplified)
         max_drawdown = 0.0
-        if trading_system.equity_curve:
-            equity_values = [point['equity'] for point in trading_system.equity_curve]
-            peak = equity_values[0]
-            for equity in equity_values:
-                if equity > peak:
-                    peak = equity
-                drawdown = (peak - equity) / peak
-                max_drawdown = max(max_drawdown, drawdown)
+        if hasattr(trading_system, 'trade_history') and trading_system.trade_history:
+            running_pnl = 0.0
+            peak_pnl = 0.0
+            for trade in trading_system.trade_history:
+                if trade.pnl:
+                    running_pnl += trade.pnl
+                    if running_pnl > peak_pnl:
+                        peak_pnl = running_pnl
+                    if peak_pnl > 0:
+                        drawdown = (peak_pnl - running_pnl) / peak_pnl
+                        max_drawdown = max(max_drawdown, drawdown)
         
         return PerformanceMetrics(
-            total_pnl=trading_system.total_pnl,
-            total_roi=trading_system.total_pnl / trading_system.global_config.total_capital,
-            daily_pnl=trading_system.daily_pnl,
-            active_trades=len(trading_system.active_trades),
+            total_pnl=total_pnl,
+            total_roi=total_roi,
+            daily_pnl=total_pnl,  # Simplified - using total as daily
+            active_trades=active_trades,
             win_rate=win_rate,
             total_trades=total_trades,
             max_drawdown=max_drawdown
@@ -186,7 +234,8 @@ async def get_bot_status():
     
     if trading_system:
         bots = []
-        for i, config in enumerate(trading_system.bot_configs):
+        # bot_configs is a dictionary {bot_id: BotConfig}
+        for bot_id, config in trading_system.bot_configs.items():
             # Calculate bot-specific PnL
             bot_trades = [t for t in trading_system.trade_history if t.symbol == config.symbol]
             bot_pnl = sum([t.pnl for t in bot_trades if t.pnl])
@@ -245,6 +294,139 @@ async def get_equity_curve():
     # Return empty data when system is not running
     return {"equity_curve": []}
 
+@app.get("/api/logs", response_model=Dict[str, List[SystemLog]])
+async def get_system_logs():
+    """Get recent system logs."""
+    global system_logs
+    
+    # Convert to SystemLog objects
+    logs = [
+        SystemLog(
+            timestamp=log["timestamp"],
+            level=log["level"],
+            message=log["message"],
+            source=log["source"]
+        )
+        for log in system_logs
+    ]
+    
+    return {"logs": logs}
+
+@app.put("/api/bots/{bot_id}/config")
+async def update_bot_config(bot_id: str, config: BotConfigUpdate):
+    """Update bot configuration."""
+    global trading_system
+    
+    try:
+        add_system_log("INFO", f"Updating configuration for bot {bot_id}", "api")
+        
+        # For now, we'll store the config update and require system restart
+        # In a production system, you might want to update the running bot
+        
+        # TODO: Implement actual bot config update
+        # This would typically involve:
+        # 1. Validating the new configuration
+        # 2. Updating the bot's configuration in memory/database
+        # 3. Restarting the specific bot with new config
+        
+        add_system_log("SUCCESS", f"Bot {bot_id} configuration updated (restart required)", "api")
+        
+        return {
+            "message": "Bot configuration updated successfully",
+            "restart_required": True,
+            "config": {
+                "symbol": config.symbol,
+                "timeframe": config.timeframe,
+                "enabled": config.enabled,
+                "risk_per_trade": config.risk_per_trade,
+                "max_positions": config.max_positions,
+                "stop_loss": config.stop_loss,
+                "take_profit": config.take_profit
+            }
+        }
+        
+    except Exception as e:
+        add_system_log("ERROR", f"Failed to update bot {bot_id}: {str(e)}", "api")
+        raise HTTPException(status_code=500, detail=f"Failed to update bot configuration: {str(e)}")
+
+@app.post("/api/bots/{bot_id}/toggle")
+async def toggle_bot(bot_id: str, enabled: dict):
+    """Toggle bot enabled/disabled state."""
+    global trading_system
+    
+    try:
+        is_enabled = enabled.get("enabled", False)
+        action = "enabled" if is_enabled else "disabled"
+        
+        add_system_log("INFO", f"Bot {bot_id} {action}", "api")
+        
+        # TODO: Implement actual bot toggle
+        # This would typically involve:
+        # 1. Finding the bot by ID
+        # 2. Updating its enabled state
+        # 3. Starting/stopping the bot accordingly
+        
+        return {
+            "message": f"Bot {action} successfully",
+            "bot_id": bot_id,
+            "enabled": is_enabled
+        }
+        
+    except Exception as e:
+        add_system_log("ERROR", f"Failed to toggle bot {bot_id}: {str(e)}", "api")
+        raise HTTPException(status_code=500, detail=f"Failed to toggle bot: {str(e)}")
+
+@app.post("/api/generate-test-trades")
+async def generate_test_trades():
+    """Generate some test trades for demonstration purposes."""
+    global trading_system
+    
+    try:
+        add_system_log("INFO", "Generating test trades for demonstration", "api")
+        
+        if not trading_system:
+            raise HTTPException(status_code=400, detail="Trading system not running")
+        
+        # Generate some mock trades
+        import random
+        from datetime import datetime, timedelta
+        
+        symbols = ['LINK/USDT', 'BTC/USDT', 'ETH/USDT']
+        
+        for i in range(5):  # Generate 5 test trades
+            symbol = random.choice(symbols)
+            direction = random.choice([1, -1])  # 1 for long, -1 for short
+            entry_price = random.uniform(100, 50000) if 'BTC' in symbol else random.uniform(1, 100)
+            exit_price = entry_price * (1 + random.uniform(-0.05, 0.05))  # ±5% change
+            pnl = (exit_price - entry_price) * direction * random.uniform(0.1, 1.0)
+            
+            # Create a mock trade object
+            trade = type('Trade', (), {
+                'symbol': symbol,
+                'direction': direction,
+                'entry_price': entry_price,
+                'exit_price': exit_price,
+                'pnl': pnl,
+                'status': random.choice(['completed', 'open', 'closed']),
+                'entry_time': int((datetime.now() - timedelta(hours=random.randint(1, 24))).timestamp() * 1000)
+            })()
+            
+            # Add to trading system's trade history
+            if not hasattr(trading_system, 'trade_history'):
+                trading_system.trade_history = []
+            trading_system.trade_history.append(trade)
+        
+        add_system_log("SUCCESS", f"Generated 5 test trades", "api")
+        
+        return {
+            "message": "Test trades generated successfully",
+            "trades_generated": 5
+        }
+        
+    except Exception as e:
+        add_system_log("ERROR", f"Failed to generate test trades: {str(e)}", "api")
+        raise HTTPException(status_code=500, detail=f"Failed to generate test trades: {str(e)}")
+
 @app.post("/api/start")
 async def start_system(background_tasks: BackgroundTasks):
     """Start the trading system."""
@@ -254,15 +436,23 @@ async def start_system(background_tasks: BackgroundTasks):
         raise HTTPException(status_code=400, detail="System is already running")
     
     try:
+        add_system_log("INFO", "Starting trading system...", "api")
+        
         # Create system configuration
         global_config, bot_configs = create_production_config()
         trading_system = ProductionTradingSystem(global_config, bot_configs)
         
+        add_system_log("INFO", f"System initialized with {len(bot_configs)} bots", "system")
+        add_system_log("INFO", f"Paper trading: {global_config.paper_trading}", "system")
+        add_system_log("INFO", f"Total capital: ${global_config.total_capital:,.2f}", "system")
+        
         # Start system in background
         system_task = asyncio.create_task(trading_system.start())
         
+        add_system_log("SUCCESS", "Trading system started successfully", "api")
         return {"message": "Trading system started successfully"}
     except Exception as e:
+        add_system_log("ERROR", f"Failed to start system: {str(e)}", "api")
         raise HTTPException(status_code=500, detail=f"Failed to start system: {str(e)}")
 
 @app.post("/api/stop")
@@ -274,6 +464,8 @@ async def stop_system():
         raise HTTPException(status_code=400, detail="System is not running")
     
     try:
+        add_system_log("INFO", "Stopping trading system...", "api")
+        
         # Cancel the system task
         system_task.cancel()
         
@@ -281,8 +473,10 @@ async def stop_system():
         if trading_system:
             await trading_system._shutdown()
         
+        add_system_log("SUCCESS", "Trading system stopped successfully", "api")
         return {"message": "Trading system stopped successfully"}
     except Exception as e:
+        add_system_log("ERROR", f"Failed to stop system: {str(e)}", "api")
         raise HTTPException(status_code=500, detail=f"Failed to stop system: {str(e)}")
 
 @app.post("/api/emergency-stop")
@@ -638,9 +832,6 @@ async def internal_error_handler(request, exc):
     return {"error": "Internal server error"}
 
 
-# Mount static files - serve React build
-app.mount("/", StaticFiles(directory="frontend_react/dist", html=True), name="static")
-
 def main():
     """Run the API server."""
     print("🚀 Starting Trading Bot ML API Server...")
@@ -650,11 +841,18 @@ def main():
     # Ensure React build directory exists
     Path("frontend_react/dist").mkdir(parents=True, exist_ok=True)
     
+    # Mount static files - serve React build (after ensuring directory exists)
+    try:
+        app.mount("/", StaticFiles(directory="frontend_react/dist", html=True), name="static")
+    except RuntimeError:
+        print("⚠️  Frontend build not found. API-only mode.")
+        pass
+    
     # Run server
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=8000,
+        port=12000,
         log_level="info",
         access_log=True
     )

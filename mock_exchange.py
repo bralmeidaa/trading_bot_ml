@@ -13,11 +13,12 @@ class MockExchange:
     """Mock exchange that simulates market data."""
     
     def __init__(self):
-        self.symbols = ['LINK/USDT', 'ADA/USDT', 'DOT/USDT']
+        self.symbols = ['LINK/USDT', 'ADA/USDT', 'DOT/USDT', 'BTC/USDT']
         self.base_prices = {
             'LINK/USDT': 7.5,
             'ADA/USDT': 0.35,
-            'DOT/USDT': 5.2
+            'DOT/USDT': 5.2,
+            'BTC/USDT': 43000.0
         }
         
     def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> List[List[float]]:

@@ -107,12 +107,23 @@ class ProductionTradingSystem:
         self.global_config = global_config
         self.bot_configs = {f"{config.symbol}_{config.timeframe}": config for config in bot_configs}
         
-        # Initialize exchange
-        self.exchange = ccxt.binance({
-            'sandbox': global_config.paper_trading,
-            'rateLimit': 1200,
-            'enableRateLimit': True,
-        })
+        # Initialize exchange with fallback to mock
+        self.using_mock = False
+        try:
+            self.exchange = ccxt.binance({
+                'sandbox': global_config.paper_trading,
+                'rateLimit': 1200,
+                'enableRateLimit': True,
+            })
+            # Test connection
+            self.exchange.load_markets()
+            logger.info("✅ Connected to Binance exchange")
+        except Exception as e:
+            logger.warning(f"⚠️ Cannot connect to Binance: {e}")
+            logger.info("🔄 Using mock exchange for development/testing")
+            from mock_exchange import MockExchange
+            self.exchange = MockExchange()
+            self.using_mock = True
         
         # System state
         self.active_trades: Dict[str, Trade] = {}

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Activity, FileText, TrendingUp, TrendingDown, AlertCircle, RefreshCw } from 'lucide-react';
-import { useRecentTrades } from '../hooks/useApi';
+import { useRecentTrades, useLogs } from '../hooks/useApi';
 import { formatCurrency, formatDateTime, getStatusColor } from '../utils/formatters';
 
 const TabButton = ({ active, onClick, children, icon: Icon }) => (
@@ -150,14 +150,112 @@ const RecentTrades = () => {
   );
 };
 
-const SystemLogs = () => {
+const LogRow = ({ log }) => {
+  const getLevelColor = (level) => {
+    switch (level.toUpperCase()) {
+      case 'ERROR':
+        return 'text-danger-600 bg-danger-50';
+      case 'SUCCESS':
+        return 'text-success-600 bg-success-50';
+      case 'WARNING':
+        return 'text-warning-600 bg-warning-50';
+      case 'INFO':
+      default:
+        return 'text-blue-600 bg-blue-50';
+    }
+  };
+
   return (
-    <div className="text-center py-8">
-      <FileText className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-      <p className="text-gray-600">System logs feature coming soon...</p>
-      <p className="text-sm text-gray-500 mt-2">
-        This will show real-time system logs and trading events.
-      </p>
+    <tr className="hover:bg-gray-50">
+      <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-500">
+        {log.timestamp}
+      </td>
+      <td className="px-6 py-3 whitespace-nowrap">
+        <span className={`px-2 py-1 text-xs font-medium rounded-full ${getLevelColor(log.level)}`}>
+          {log.level}
+        </span>
+      </td>
+      <td className="px-6 py-3 text-sm text-gray-900">
+        {log.message}
+      </td>
+      <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-500">
+        {log.source}
+      </td>
+    </tr>
+  );
+};
+
+const SystemLogs = () => {
+  const { data: logs, loading, error, refetch } = useLogs();
+
+  if (error) {
+    return (
+      <div className="text-center py-8">
+        <AlertCircle className="h-12 w-12 text-danger-500 mx-auto mb-4" />
+        <p className="text-danger-600">Failed to load logs: {error}</p>
+        <button
+          onClick={refetch}
+          className="mt-2 btn-secondary flex items-center space-x-2 mx-auto"
+        >
+          <RefreshCw className="h-4 w-4" />
+          <span>Retry</span>
+        </button>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="animate-pulse">
+        <div className="space-y-3">
+          {[...Array(5)].map((_, i) => (
+            <div key={i} className="flex items-center space-x-4">
+              <div className="h-4 bg-gray-200 rounded w-16"></div>
+              <div className="h-4 bg-gray-200 rounded w-20"></div>
+              <div className="h-4 bg-gray-200 rounded flex-1"></div>
+              <div className="h-4 bg-gray-200 rounded w-16"></div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="min-w-full divide-y divide-gray-200">
+        <thead className="bg-gray-50">
+          <tr>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              Time
+            </th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              Level
+            </th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              Message
+            </th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              Source
+            </th>
+          </tr>
+        </thead>
+        <tbody className="bg-white divide-y divide-gray-200">
+          {logs && logs.length > 0 ? (
+            logs.slice().reverse().map((log, index) => (
+              <LogRow key={index} log={log} />
+            ))
+          ) : (
+            <tr>
+              <td colSpan="4" className="px-6 py-8 text-center text-gray-500">
+                <FileText className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                <p>No system logs available</p>
+                <p className="text-sm">Logs will appear here when the system is active</p>
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
     </div>
   );
 };
