@@ -62,6 +62,7 @@ stages:
           **/*
           !.git/**/*
           !**/*.md
+          !**/*.*ignore
         TargetFolder: '$(deploymentPath)'
         CleanTargetFolder: false
         OverWrite: true
