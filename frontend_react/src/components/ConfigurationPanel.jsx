@@ -157,13 +157,13 @@ export default function ConfigurationPanel() {
         emergency_stop_drawdown: (globalConfig.emergency_stop_drawdown || 0.08) * 100,
       });
       
-      if (config.bot_configs) {
+      if (config.bot_configs && Array.isArray(config.bot_configs)) {
         const processedBots = config.bot_configs.map((bot, index) => ({
           ...bot,
           id: bot.id || `${bot.symbol}_${bot.timeframe}_${index}`
         }));
         console.log('ConfigurationPanel - setting bot configs:', processedBots);
-        setBotConfigs(processedBots);
+        setBotConfigs([...processedBots]); // Force new array reference
       } else {
         console.log('ConfigurationPanel - no bot_configs found in config:', config);
         setBotConfigs([]);
@@ -390,9 +390,14 @@ export default function ConfigurationPanel() {
                 
                 <BotManagement 
                   bots={botConfigs} 
-                  onBotsChange={() => {
+                  onBotsChange={async () => {
                     console.log('onBotsChange called, refetching...');
-                    refetch();
+                    try {
+                      await refetch();
+                      console.log('Refetch completed');
+                    } catch (error) {
+                      console.error('Error during refetch:', error);
+                    }
                   }}
                 />
               </div>
