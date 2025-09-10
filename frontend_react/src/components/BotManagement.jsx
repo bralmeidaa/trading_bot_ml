@@ -313,6 +313,11 @@ export default function BotManagement({ bots, onBotsChange }) {
   useEffect(() => {
     loadBotCount();
     console.log('BotManagement - bots received:', bots);
+    console.log('BotManagement - bots type:', typeof bots);
+    console.log('BotManagement - bots is array:', Array.isArray(bots));
+    if (bots) {
+      console.log('BotManagement - bots length:', bots.length);
+    }
   }, [bots]);
 
   const loadAvailableSymbols = async () => {
@@ -430,15 +435,7 @@ export default function BotManagement({ bots, onBotsChange }) {
         </div>
       </div>
 
-      {/* Debug info */}
-      <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-        <p className="text-sm text-yellow-800">
-          <strong>Debug:</strong> Bots received: {bots ? JSON.stringify(bots, null, 2) : 'null/undefined'}
-        </p>
-        <p className="text-sm text-yellow-800 mt-1">
-          <strong>Length:</strong> {bots ? bots.length : 'N/A'}
-        </p>
-      </div>
+
 
       {bots && bots.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

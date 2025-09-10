@@ -390,7 +390,10 @@ export default function ConfigurationPanel() {
                 
                 <BotManagement 
                   bots={botConfigs} 
-                  onBotsChange={refetch}
+                  onBotsChange={() => {
+                    console.log('onBotsChange called, refetching...');
+                    refetch();
+                  }}
                 />
               </div>
             )}

@@ -37,9 +37,19 @@
       "stop_loss_pct": 0.02,
       "take_profit_pct": 0.038,
       "enabled": true
+    },
+    {
+      "symbol": "ETH/USDT",
+      "timeframe": "1h",
+      "capital_allocation": 0.3,
+      "max_risk_per_trade": 0.02,
+      "confidence_threshold": 0.6,
+      "stop_loss_pct": 0.015,
+      "take_profit_pct": 0.03,
+      "enabled": true
     }
   ],
-  "last_updated": "2025-09-04T21:09:13.087271",
-  "updated_by": "System",
-  "update_reason": "Default configuration created"
+  "last_updated": "2025-09-10T23:55:54.512262",
+  "updated_by": "API User",
+  "update_reason": "Added new bot: ETH/USDT 1h"
 }
