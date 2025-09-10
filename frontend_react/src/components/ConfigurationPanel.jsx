@@ -158,10 +158,15 @@ export default function ConfigurationPanel() {
       });
       
       if (config.bot_configs) {
-        setBotConfigs(config.bot_configs.map((bot, index) => ({
+        const processedBots = config.bot_configs.map((bot, index) => ({
           ...bot,
           id: bot.id || `${bot.symbol}_${bot.timeframe}_${index}`
-        })));
+        }));
+        console.log('ConfigurationPanel - setting bot configs:', processedBots);
+        setBotConfigs(processedBots);
+      } else {
+        console.log('ConfigurationPanel - no bot_configs found in config:', config);
+        setBotConfigs([]);
       }
     }
   }, [config]);

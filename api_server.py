@@ -599,7 +599,7 @@ async def get_full_configuration():
     try:
         config_data = config_manager.get_configuration_dict()
         enhanced_logger.log_api_request("/api/config/full", "GET")
-        return config_data
+        return {"success": True, "data": config_data}
     except Exception as e:
         enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.API, f"Error getting full config: {e}")
         raise HTTPException(status_code=500, detail=str(e))

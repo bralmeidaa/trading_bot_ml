@@ -312,6 +312,7 @@ export default function BotManagement({ bots, onBotsChange }) {
 
   useEffect(() => {
     loadBotCount();
+    console.log('BotManagement - bots received:', bots);
   }, [bots]);
 
   const loadAvailableSymbols = async () => {
