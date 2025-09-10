@@ -58,13 +58,17 @@ stages:
     - task: CopyFiles@2
       inputs:
         SourceFolder: '$(System.DefaultWorkingDirectory)'
-        Contents: '**'
+        Contents: |
+          **/*
+          !.git/**/*
+          !**/*.md
         TargetFolder: '$(deploymentPath)'
         CleanTargetFolder: false
         OverWrite: true
         ignoreMakeDirErrors: true
 
     - task: Docker@2
+      displayName: 'Docker Login'
       inputs:
         containerRegistry: 'docker-account-bralmeida'
         command: 'login'
@@ -86,6 +90,7 @@ stages:
           --push .
 
     - task: Docker@2
+      displayName: 'Docker Logout'
       inputs:
         containerRegistry: 'docker-account-bralmeida'
         command: 'logout'
