@@ -12,7 +12,7 @@
 #     - docs/*
 
 pool:
-  vmImage: 'trading-bot-ml-vm'
+  name: 'trading-bot-ml-vm'
 
 variables:
   # Azure DevOps Variables (set in pipeline variables)
