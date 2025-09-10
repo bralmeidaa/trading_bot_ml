@@ -136,19 +136,8 @@ class LogFilter(BaseModel):
     symbol: Optional[str] = None
     limit: int = 1000
 
-# Mount static files - serve React build
-# Ensure React build directory exists first
-Path("frontend_react/dist").mkdir(parents=True, exist_ok=True)
-
-# Mount static files only if dist directory exists and has content
-try:
-    if Path("frontend_react/dist/index.html").exists():
-        app.mount("/", StaticFiles(directory="frontend_react/dist", html=True), name="static")
-    else:
-        print("⚠️  Frontend build not found. API-only mode.")
-except RuntimeError as e:
-    print(f"⚠️  Could not mount static files: {e}. API-only mode.")
-    pass
+# Note: Static files mounting is done in main() function after all API routes are defined
+# This prevents conflicts between API routes and static file serving
 
 @app.get("/api/status", response_model=SystemStatus)
 async def get_system_status():
@@ -836,28 +825,41 @@ async def run_backtest():
 # Error handlers
 @app.exception_handler(404)
 async def not_found_handler(request, exc):
-    return {"error": "Endpoint not found"}
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=404,
+        content={"error": "Endpoint not found"}
+    )
 
 @app.exception_handler(500)
 async def internal_error_handler(request, exc):
-    return {"error": "Internal server error"}
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error"}
+    )
 
 
 def main():
     """Run the API server."""
     print("🚀 Starting Trading Bot ML API Server...")
-    print("📊 Dashboard will be available at: http://localhost:8000")
-    print("🔧 API documentation at: http://localhost:8000/docs")
+    print("📊 Dashboard will be available at: http://localhost:12000")
+    print("🔧 API documentation at: http://localhost:12000/docs")
     
-    # Ensure React build directory exists
-    Path("frontend_react/dist").mkdir(parents=True, exist_ok=True)
+    # Mount static files - serve React build (AFTER all API routes are defined)
+    # This prevents conflicts between API routes and static file serving
+    frontend_dist = Path("frontend_react/dist")
+    frontend_index = frontend_dist / "index.html"
     
-    # Mount static files - serve React build (after ensuring directory exists)
-    try:
-        app.mount("/", StaticFiles(directory="frontend_react/dist", html=True), name="static")
-    except RuntimeError:
-        print("⚠️  Frontend build not found. API-only mode.")
-        pass
+    if frontend_index.exists():
+        print("✅ Frontend build found - enabling full-stack mode")
+        try:
+            app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="static")
+        except RuntimeError as e:
+            print(f"⚠️  Could not mount static files: {e}. API-only mode.")
+    else:
+        print("⚠️  Frontend build not found. Running in API-only mode.")
+        print(f"   Expected: {frontend_index.absolute()}")
     
     # Run server
     uvicorn.run(
