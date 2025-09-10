@@ -3,7 +3,7 @@ services:
     image: bralmeida/trading-bot-ml:latest
     container_name: trading-bot-master
     ports:
-      - "8000:8000"
+      - "12000:12000"
     environment:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
