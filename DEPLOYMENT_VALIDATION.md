@@ -100,6 +100,23 @@ The pipeline will automatically verify:
 
 ---
 
+## 🔧 **CRITICAL FIX APPLIED**
+
+### **Root Cause Identified**
+The Docker CMD was executing `uvicorn` directly instead of the `main()` function that contains the StaticFiles mount logic.
+
+### **Fix Applied**
+- **Before**: `CMD ["python", "-m", "uvicorn", "api_server:app", "--host", "0.0.0.0", "--port", "12000"]`
+- **After**: `CMD ["python", "api_server.py"]`
+
+### **Testing Results** ✅
+- ✅ Frontend: HTTP 200 OK on `/`
+- ✅ API: HTTP 200 OK on `/api/health`
+- ✅ Log shows: "Frontend build found - enabling full-stack mode"
+- ✅ No more 404 errors on root path
+
+---
+
 **✅ VALIDATION COMPLETE - READY FOR AUTOMATED DEPLOYMENT**
 
 All configurations validated and compatible with applied fixes. The automated deployment will restore full functionality to both frontend and API.
