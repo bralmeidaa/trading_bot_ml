@@ -3,6 +3,7 @@ import { Settings, Save, RotateCcw, ChevronDown, ChevronUp, AlertCircle } from '
 import { useConfig } from '../hooks/useApi';
 import { apiService } from '../services/api';
 import { notificationService } from '../utils/notifications';
+import BotManagement from './BotManagement';
 
 const FormField = ({ label, name, type = 'text', value, onChange, placeholder, min, max, step, required = false, disabled = false }) => (
   <div className="mb-4">
@@ -360,14 +361,14 @@ export default function ConfigurationPanel() {
             </div>
           </div>
 
-          {/* Advanced Bot Configuration */}
+          {/* Bot Management */}
           <div>
             <button
               onClick={() => setShowAdvanced(!showAdvanced)}
               className="flex items-center space-x-2 text-lg font-medium text-gray-900 hover:text-primary-600 transition-colors duration-200"
             >
               <Settings className="h-5 w-5" />
-              <span>Advanced Bot Configuration</span>
+              <span>Bot Configuration & Management</span>
               {showAdvanced ? (
                 <ChevronUp className="h-5 w-5" />
               ) : (
@@ -376,27 +377,16 @@ export default function ConfigurationPanel() {
             </button>
             
             {showAdvanced && (
-              <div className="mt-4 space-y-4">
-                <p className="text-sm text-gray-600">
-                  Fine-tune individual bot parameters for optimal performance. 
-                  Default values are based on backtesting results.
+              <div className="mt-4">
+                <p className="text-sm text-gray-600 mb-6">
+                  Create and manage up to 5 trading bots with custom symbols, timeframes, and parameters.
+                  Each bot can be configured independently for optimal performance.
                 </p>
                 
-                {botConfigs.length > 0 ? (
-                  botConfigs.map((botConfig, index) => (
-                    <AdvancedBotConfig
-                      key={botConfig.id || index}
-                      botConfig={botConfig}
-                      onChange={handleBotConfigChange}
-                    />
-                  ))
-                ) : (
-                  <div className="text-center py-8 text-gray-500">
-                    <Settings className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                    <p>No bot configurations available</p>
-                    <p className="text-sm">Bot configurations will appear here once loaded</p>
-                  </div>
-                )}
+                <BotManagement 
+                  bots={botConfigs} 
+                  onBotsChange={refetch}
+                />
               </div>
             )}
           </div>
@@ -408,8 +398,11 @@ export default function ConfigurationPanel() {
               <li>• Start with Paper Trading to test your configuration safely</li>
               <li>• Minimum capital of $1,200 is recommended for optimal performance</li>
               <li>• Keep daily loss limit at 4% or lower to preserve capital</li>
+              <li>• You can create up to 5 bots with different symbols and timeframes</li>
               <li>• LINK/USDT 5m timeframe has shown the best backtesting results</li>
+              <li>• Diversify across different timeframes (1m, 5m, 15m, 1h) for better risk management</li>
               <li>• Lower confidence thresholds generate more trades but may reduce accuracy</li>
+              <li>• Ensure total capital allocation across all bots doesn't exceed 100%</li>
             </ul>
           </div>
         </div>

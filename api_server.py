@@ -496,32 +496,73 @@ async def emergency_stop():
         raise HTTPException(status_code=500, detail=f"Emergency stop failed: {str(e)}")
 
 @app.post("/api/config")
-async def update_configuration(config: ConfigUpdate):
-    """Update system configuration."""
+async def update_configuration(config: dict):
+    """Update system configuration including bot configs."""
     global trading_system
     
     try:
-        if trading_system:
-            # Update global configuration
-            trading_system.global_config.total_capital = config.total_capital
-            trading_system.global_config.daily_loss_limit = config.daily_loss_limit
-            trading_system.global_config.daily_profit_target = config.daily_profit_target
-            trading_system.global_config.paper_trading = config.trading_mode == "paper"
+        # Load current configuration
+        config_file = "trading_config.json"
+        if os.path.exists(config_file):
+            with open(config_file, "r") as f:
+                current_config = json.load(f)
+        else:
+            current_config = {"global_config": {}, "bot_configs": []}
+        
+        # Update global configuration
+        if "trading_mode" in config:
+            current_config["global_config"]["paper_trading"] = config["trading_mode"] == "paper"
+        if "total_capital" in config:
+            current_config["global_config"]["total_capital"] = config["total_capital"]
+        if "daily_loss_limit" in config:
+            current_config["global_config"]["daily_loss_limit"] = config["daily_loss_limit"]
+        if "daily_profit_target" in config:
+            current_config["global_config"]["daily_profit_target"] = config["daily_profit_target"]
+        if "max_concurrent_trades" in config:
+            current_config["global_config"]["max_concurrent_trades"] = config["max_concurrent_trades"]
+        if "emergency_stop_drawdown" in config:
+            current_config["global_config"]["emergency_stop_drawdown"] = config["emergency_stop_drawdown"]
+        
+        # Update bot configurations if provided
+        if "bot_configs" in config:
+            # Validate maximum of 5 bots
+            if len(config["bot_configs"]) > 5:
+                raise HTTPException(status_code=400, detail="Maximum of 5 bots allowed")
+            
+            # Validate each bot configuration
+            for bot_config in config["bot_configs"]:
+                if not all(key in bot_config for key in ["symbol", "timeframe"]):
+                    raise HTTPException(status_code=400, detail="Bot configuration must include symbol and timeframe")
+            
+            current_config["bot_configs"] = config["bot_configs"]
+        
+        # Add metadata
+        current_config["last_updated"] = datetime.now().isoformat()
+        current_config["updated_by"] = "API User"
+        current_config["update_reason"] = "Configuration updated via API"
         
         # Save configuration to file
-        config_data = {
-            "trading_mode": config.trading_mode,
-            "total_capital": config.total_capital,
-            "daily_loss_limit": config.daily_loss_limit,
-            "daily_profit_target": config.daily_profit_target,
-            "updated_at": datetime.now().isoformat()
-        }
+        with open(config_file, "w") as f:
+            json.dump(current_config, f, indent=2)
         
-        with open("system_config.json", "w") as f:
-            json.dump(config_data, f, indent=2)
+        # Update running system if available
+        if trading_system:
+            if "trading_mode" in config:
+                trading_system.global_config.paper_trading = config["trading_mode"] == "paper"
+            if "total_capital" in config:
+                trading_system.global_config.total_capital = config["total_capital"]
+            if "daily_loss_limit" in config:
+                trading_system.global_config.daily_loss_limit = config["daily_loss_limit"]
+            if "daily_profit_target" in config:
+                trading_system.global_config.daily_profit_target = config["daily_profit_target"]
         
-        return {"message": "Configuration updated successfully"}
+        add_system_log("SUCCESS", "Configuration updated successfully", "api")
+        return {"message": "Configuration updated successfully", "success": True}
+        
+    except HTTPException:
+        raise
     except Exception as e:
+        add_system_log("ERROR", f"Failed to update configuration: {str(e)}", "api")
         raise HTTPException(status_code=500, detail=f"Failed to update configuration: {str(e)}")
 
 @app.get("/api/logs")
@@ -783,6 +824,211 @@ async def get_log_categories():
         "levels": [level.value for level in LogLevel],
         "categories": [category.value for category in LogCategory]
     }
+
+# ============================================================================
+# BOT MANAGEMENT ENDPOINTS
+# ============================================================================
+
+@app.get("/api/bots/available-symbols")
+async def get_available_symbols():
+    """Get list of available trading symbols."""
+    # Popular cryptocurrency pairs
+    symbols = [
+        "BTC/USDT", "ETH/USDT", "BNB/USDT", "ADA/USDT", "XRP/USDT",
+        "SOL/USDT", "DOT/USDT", "LINK/USDT", "MATIC/USDT", "AVAX/USDT",
+        "UNI/USDT", "LTC/USDT", "ATOM/USDT", "ALGO/USDT", "VET/USDT",
+        "FTM/USDT", "NEAR/USDT", "SAND/USDT", "MANA/USDT", "CRV/USDT"
+    ]
+    return {"symbols": symbols}
+
+@app.get("/api/bots/available-timeframes")
+async def get_available_timeframes():
+    """Get list of available timeframes."""
+    timeframes = [
+        {"value": "1m", "label": "1 Minute"},
+        {"value": "5m", "label": "5 Minutes"},
+        {"value": "15m", "label": "15 Minutes"},
+        {"value": "30m", "label": "30 Minutes"},
+        {"value": "1h", "label": "1 Hour"},
+        {"value": "4h", "label": "4 Hours"},
+        {"value": "1d", "label": "1 Day"}
+    ]
+    return {"timeframes": timeframes}
+
+@app.post("/api/bots/add")
+async def add_bot_configuration(bot_config: NewBotConfig):
+    """Add a new bot configuration."""
+    try:
+        # Load current configuration
+        config_file = "trading_config.json"
+        if os.path.exists(config_file):
+            with open(config_file, "r") as f:
+                current_config = json.load(f)
+        else:
+            current_config = {"global_config": {}, "bot_configs": []}
+        
+        # Check if we already have 5 bots
+        if len(current_config.get("bot_configs", [])) >= 5:
+            raise HTTPException(status_code=400, detail="Maximum of 5 bots allowed")
+        
+        # Check for duplicate symbol/timeframe combination
+        existing_combinations = [(bot["symbol"], bot["timeframe"]) for bot in current_config.get("bot_configs", [])]
+        if (bot_config.symbol, bot_config.timeframe) in existing_combinations:
+            raise HTTPException(status_code=400, detail=f"Bot with {bot_config.symbol} on {bot_config.timeframe} already exists")
+        
+        # Add new bot configuration
+        new_bot = {
+            "symbol": bot_config.symbol,
+            "timeframe": bot_config.timeframe,
+            "capital_allocation": bot_config.capital_allocation,
+            "max_risk_per_trade": bot_config.max_risk_per_trade,
+            "confidence_threshold": bot_config.confidence_threshold,
+            "stop_loss_pct": bot_config.stop_loss_pct,
+            "take_profit_pct": bot_config.take_profit_pct,
+            "enabled": bot_config.enabled
+        }
+        
+        current_config.setdefault("bot_configs", []).append(new_bot)
+        
+        # Update metadata
+        current_config["last_updated"] = datetime.now().isoformat()
+        current_config["updated_by"] = "API User"
+        current_config["update_reason"] = f"Added new bot: {bot_config.symbol} {bot_config.timeframe}"
+        
+        # Save configuration
+        with open(config_file, "w") as f:
+            json.dump(current_config, f, indent=2)
+        
+        add_system_log("SUCCESS", f"Added new bot: {bot_config.symbol} {bot_config.timeframe}", "api")
+        return {
+            "message": f"Bot {bot_config.symbol} {bot_config.timeframe} added successfully",
+            "success": True,
+            "bot_config": new_bot
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        add_system_log("ERROR", f"Failed to add bot: {str(e)}", "api")
+        raise HTTPException(status_code=500, detail=f"Failed to add bot: {str(e)}")
+
+@app.put("/api/bots/update/{bot_index}")
+async def update_bot_configuration(bot_index: int, bot_config: dict):
+    """Update an existing bot configuration."""
+    try:
+        # Load current configuration
+        config_file = "trading_config.json"
+        if not os.path.exists(config_file):
+            raise HTTPException(status_code=404, detail="Configuration file not found")
+        
+        with open(config_file, "r") as f:
+            current_config = json.load(f)
+        
+        bot_configs = current_config.get("bot_configs", [])
+        
+        if bot_index < 0 or bot_index >= len(bot_configs):
+            raise HTTPException(status_code=404, detail="Bot not found")
+        
+        # Update bot configuration
+        old_bot = bot_configs[bot_index].copy()
+        for key, value in bot_config.items():
+            if key in ["symbol", "timeframe", "capital_allocation", "max_risk_per_trade", 
+                      "confidence_threshold", "stop_loss_pct", "take_profit_pct", "enabled"]:
+                bot_configs[bot_index][key] = value
+        
+        # Check for duplicate symbol/timeframe combination (excluding current bot)
+        if "symbol" in bot_config or "timeframe" in bot_config:
+            new_symbol = bot_configs[bot_index]["symbol"]
+            new_timeframe = bot_configs[bot_index]["timeframe"]
+            
+            for i, bot in enumerate(bot_configs):
+                if i != bot_index and bot["symbol"] == new_symbol and bot["timeframe"] == new_timeframe:
+                    raise HTTPException(status_code=400, detail=f"Bot with {new_symbol} on {new_timeframe} already exists")
+        
+        # Update metadata
+        current_config["last_updated"] = datetime.now().isoformat()
+        current_config["updated_by"] = "API User"
+        current_config["update_reason"] = f"Updated bot: {bot_configs[bot_index]['symbol']} {bot_configs[bot_index]['timeframe']}"
+        
+        # Save configuration
+        with open(config_file, "w") as f:
+            json.dump(current_config, f, indent=2)
+        
+        add_system_log("SUCCESS", f"Updated bot: {bot_configs[bot_index]['symbol']} {bot_configs[bot_index]['timeframe']}", "api")
+        return {
+            "message": f"Bot updated successfully",
+            "success": True,
+            "bot_config": bot_configs[bot_index]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        add_system_log("ERROR", f"Failed to update bot: {str(e)}", "api")
+        raise HTTPException(status_code=500, detail=f"Failed to update bot: {str(e)}")
+
+@app.delete("/api/bots/remove/{bot_index}")
+async def remove_bot_configuration(bot_index: int):
+    """Remove a bot configuration."""
+    try:
+        # Load current configuration
+        config_file = "trading_config.json"
+        if not os.path.exists(config_file):
+            raise HTTPException(status_code=404, detail="Configuration file not found")
+        
+        with open(config_file, "r") as f:
+            current_config = json.load(f)
+        
+        bot_configs = current_config.get("bot_configs", [])
+        
+        if bot_index < 0 or bot_index >= len(bot_configs):
+            raise HTTPException(status_code=404, detail="Bot not found")
+        
+        # Remove bot configuration
+        removed_bot = bot_configs.pop(bot_index)
+        
+        # Update metadata
+        current_config["last_updated"] = datetime.now().isoformat()
+        current_config["updated_by"] = "API User"
+        current_config["update_reason"] = f"Removed bot: {removed_bot['symbol']} {removed_bot['timeframe']}"
+        
+        # Save configuration
+        with open(config_file, "w") as f:
+            json.dump(current_config, f, indent=2)
+        
+        add_system_log("SUCCESS", f"Removed bot: {removed_bot['symbol']} {removed_bot['timeframe']}", "api")
+        return {
+            "message": f"Bot {removed_bot['symbol']} {removed_bot['timeframe']} removed successfully",
+            "success": True,
+            "removed_bot": removed_bot
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        add_system_log("ERROR", f"Failed to remove bot: {str(e)}", "api")
+        raise HTTPException(status_code=500, detail=f"Failed to remove bot: {str(e)}")
+
+@app.get("/api/bots/count")
+async def get_bot_count():
+    """Get current number of configured bots."""
+    try:
+        config_file = "trading_config.json"
+        if os.path.exists(config_file):
+            with open(config_file, "r") as f:
+                current_config = json.load(f)
+            bot_count = len(current_config.get("bot_configs", []))
+        else:
+            bot_count = 0
+        
+        return {
+            "current_count": bot_count,
+            "maximum_allowed": 5,
+            "can_add_more": bot_count < 5
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get bot count: {str(e)}")
 
 @app.post("/api/backtest")
 async def run_backtest():

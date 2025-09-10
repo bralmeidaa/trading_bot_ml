@@ -15,98 +15,131 @@ class ApiService {
       const response = await fetch(url, config);
       
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
       }
       
       const data = await response.json();
-      return { success: true, data };
+      return data;
     } catch (error) {
       console.error(`API request failed: ${endpoint}`, error);
-      return { success: false, error: error.message };
+      throw error;
     }
   }
 
-  // Convenience method for GET requests
+  // Convenience methods for different HTTP methods
   async get(endpoint) {
     return this.request(endpoint, { method: 'GET' });
   }
 
+  async post(endpoint, data) {
+    return this.request(endpoint, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async put(endpoint, data) {
+    return this.request(endpoint, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async delete(endpoint) {
+    return this.request(endpoint, { method: 'DELETE' });
+  }
+
   // System Status
   async getSystemStatus() {
-    return this.request('/status');
+    return this.get('/status');
   }
 
   async startSystem() {
-    return this.request('/start', { method: 'POST' });
+    return this.post('/start');
   }
 
   async stopSystem() {
-    return this.request('/stop', { method: 'POST' });
+    return this.post('/stop');
   }
 
   async emergencyStop() {
-    return this.request('/emergency-stop', { method: 'POST' });
+    return this.post('/emergency-stop');
   }
 
   // Performance Metrics
   async getMetrics() {
-    return this.request('/metrics');
+    return this.get('/metrics');
   }
 
   async getEquity() {
-    return this.request('/equity');
+    return this.get('/equity');
   }
 
   // Bot Management
   async getBots() {
-    return this.request('/bots');
+    return this.get('/bots');
   }
 
   async updateBotConfig(botId, config) {
-    return this.request(`/bots/${botId}/config`, {
-      method: 'PUT',
-      body: JSON.stringify(config),
-    });
+    return this.put(`/bots/${botId}/config`, config);
   }
 
   async toggleBot(botId, enabled) {
-    return this.request(`/bots/${botId}/toggle`, {
-      method: 'POST',
-      body: JSON.stringify({ enabled }),
-    });
+    return this.post(`/bots/${botId}/toggle`, { enabled });
+  }
+
+  // New Bot Management Endpoints
+  async getAvailableSymbols() {
+    return this.get('/bots/available-symbols');
+  }
+
+  async getAvailableTimeframes() {
+    return this.get('/bots/available-timeframes');
+  }
+
+  async addBot(botConfig) {
+    return this.post('/bots/add', botConfig);
+  }
+
+  async updateBot(botIndex, botConfig) {
+    return this.put(`/bots/update/${botIndex}`, botConfig);
+  }
+
+  async removeBot(botIndex) {
+    return this.delete(`/bots/remove/${botIndex}`);
+  }
+
+  async getBotCount() {
+    return this.get('/bots/count');
   }
 
   // Trades and Logs
   async getRecentTrades() {
-    return this.request('/trades/recent');
+    return this.get('/trades/recent');
   }
 
   async getLogs() {
-    return this.request('/logs');
+    return this.get('/logs');
   }
 
   // Configuration
   async getConfig() {
-    return this.request('/config/full');
+    return this.get('/config/full');
   }
 
   async updateConfig(config) {
-    return this.request('/config', {
-      method: 'POST',
-      body: JSON.stringify(config),
-    });
+    return this.post('/config', config);
   }
 
   // Backtest
   async runBacktest() {
-    return this.request('/backtest', {
-      method: 'POST',
-    });
+    return this.post('/backtest');
   }
 
   // Health Check
   async healthCheck() {
-    return this.request('/health');
+    return this.get('/health');
   }
 }
 
