@@ -172,21 +172,25 @@ stages:
                 echo "🎉 All verification checks passed!"
                 echo "📊 Dashboard URL: http://localhost:12000"
 
-# - stage: Rollback
-#   displayName: 'Rollback (Manual)'
-#   dependsOn: Deploy
-#   condition: failed()
+- stage: Rollback
+  displayName: 'Rollback (Manual)'
+  dependsOn: Deploy
+  condition: failed()
   
-#   jobs:
-#   - job: RollbackJob
-#     displayName: 'Rollback to Previous Version'
-    
-#     steps:
-#     - task: Bash@3
-#       displayName: 'Rollback deployment'
-#       inputs:
-#         targetType: 'inline'
-#         script: | 
+  jobs:
+  - job: RollbackJob
+    displayName: 'Rollback to Previous Version'
+    steps:
+    - task: Bash@3
+      displayName: 'Initial Tshot steps'
+      inputs:   
+        targetType: 'inline'
+        workingDirectory: '$(deploymentPath)'
+        script: | 
+          set -e
+          
+          echo "validating containers log..."
+          sudo docker compose logs
 #           echo "🔄 Starting rollback process..."
           
 #           ssh -o StrictHostKeyChecking=no $(OCI_VM_USER)@$(OCI_VM_IP) << 'EOF'
