@@ -144,6 +144,7 @@ export default function ConfigurationPanel() {
   const [botConfigs, setBotConfigs] = useState([]);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [botManagementKey, setBotManagementKey] = useState(0);
 
   useEffect(() => {
     if (config && config.global_config) {
@@ -203,7 +204,7 @@ export default function ConfigurationPanel() {
       
       if (result.success) {
         notificationService.success('Configuration saved successfully');
-        // Don't refetch immediately to avoid resetting the UI state
+        // Don't refetch to avoid resetting bot configs
         // The configuration is already saved and the UI is in sync
       } else {
         notificationService.error(`Failed to save configuration: ${result.error}`);
@@ -390,6 +391,7 @@ export default function ConfigurationPanel() {
                 </p>
                 
                 <BotManagement 
+                  key={botManagementKey}
                   bots={botConfigs} 
                   onBotsChange={async () => {
                     console.log('onBotsChange called, refetching...');
@@ -400,11 +402,23 @@ export default function ConfigurationPanel() {
                           ...bot,
                           id: bot.id || `${bot.symbol}_${bot.timeframe}_${index}`
                         }));
-                        setBotConfigs([...processedBots]); // Force new array reference
-                        console.log('Bot configs updated:', processedBots);
+                        console.log('Bot configs before update:', botConfigs);
+                        console.log('Fresh bot configs from API:', processedBots);
+                        setBotConfigs(processedBots); // Set new array directly
+                        setBotManagementKey(prev => prev + 1); // Force re-render
+                        
+                        // Force a re-render by updating the key
+                        setTimeout(() => {
+                          console.log('Bot configs after update:', processedBots);
+                        }, 100);
+                      } else {
+                        console.log('No bot_configs in response, setting empty array');
+                        setBotConfigs([]);
+                        setBotManagementKey(prev => prev + 1); // Force re-render
                       }
                     } catch (error) {
                       console.error('Error during bot config refresh:', error);
+                      notificationService.error('Failed to refresh bot configurations');
                     }
                   }}
                 />

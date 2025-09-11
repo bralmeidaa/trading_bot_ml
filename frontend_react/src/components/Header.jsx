@@ -36,12 +36,16 @@ export default function Header() {
 
       if (result.success) {
         notificationService.success(`System ${actionName} successful`);
-        // Wait a moment for the system to update its state
-        setTimeout(async () => {
-          await refetch();
-        }, 1000);
+        // Aggressive refetch strategy to ensure status updates
+        const refetchWithRetry = async (attempts = 0) => {
+          if (attempts < 5) {
+            await refetch();
+            setTimeout(() => refetchWithRetry(attempts + 1), 500);
+          }
+        };
+        setTimeout(() => refetchWithRetry(), 500);
       } else {
-        notificationService.error(`Failed to ${actionName} system: ${result.error}`);
+        notificationService.error(`Failed to ${actionName} system: ${result.error || 'Unknown error'}`);
       }
     } catch (error) {
       notificationService.error(`Error during ${actionName}: ${error.message}`);

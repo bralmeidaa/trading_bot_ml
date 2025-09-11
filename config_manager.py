@@ -344,6 +344,16 @@ class ConfigManager:
     
     def get_configuration_dict(self) -> Dict[str, Any]:
         """Get current configuration as dictionary."""
+        # Always reload from file to ensure we have the latest data
+        try:
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r') as f:
+                    file_config = json.load(f)
+                return file_config
+        except Exception as e:
+            logger.error(f"Error reading config file: {e}")
+        
+        # Fallback to in-memory config if file read fails
         return {
             'global_config': asdict(self.global_config),
             'bot_configs': [asdict(config) for config in self.bot_configs],

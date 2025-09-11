@@ -317,6 +317,7 @@ export default function BotManagement({ bots, onBotsChange }) {
     console.log('BotManagement - bots is array:', Array.isArray(bots));
     if (bots) {
       console.log('BotManagement - bots length:', bots.length);
+      console.log('BotManagement - bots content:', JSON.stringify(bots, null, 2));
     }
   }, [bots]);
 
@@ -444,7 +445,7 @@ export default function BotManagement({ bots, onBotsChange }) {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {bots.map((bot, index) => (
             <BotCard
-              key={`${bot.symbol}_${bot.timeframe}_${index}`}
+              key={`bot_${bot.symbol}_${bot.timeframe}_${index}_${bots.length}`}
               bot={bot}
               index={index}
               onEdit={handleEditBot}
