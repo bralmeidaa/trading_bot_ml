@@ -177,7 +177,7 @@ class LogFilter(BaseModel):
 # Note: Static files mounting is done in main() function after all API routes are defined
 # This prevents conflicts between API routes and static file serving
 
-@app.get("/api/status", response_model=SystemStatus)
+@app.get("/api/status")
 async def get_system_status():
     """Get current system status."""
     global trading_system, system_task
@@ -189,34 +189,37 @@ async def get_system_status():
         uptime_delta = datetime.now() - trading_system.system_start_time
         uptime = str(uptime_delta).split('.')[0]  # Remove microseconds
         
-        return SystemStatus(
-            running=running,
-            uptime=uptime,
-            total_capital=trading_system.global_config.total_capital,
-            paper_trading=trading_system.global_config.paper_trading
-        )
+        status_data = {
+            "running": running,
+            "uptime": uptime,
+            "total_capital": trading_system.global_config.total_capital,
+            "paper_trading": trading_system.global_config.paper_trading
+        }
+        return {"success": True, "data": status_data}
     
     # System is not running - get values from config file
     try:
         config_data = config_manager.get_configuration_dict()
         global_config = config_data.get("global_config", {})
         
-        return SystemStatus(
-            running=False,
-            uptime="0:00:00",
-            total_capital=global_config.get("total_capital", 10000.0),
-            paper_trading=global_config.get("paper_trading", True)
-        )
+        status_data = {
+            "running": False,
+            "uptime": "0:00:00",
+            "total_capital": global_config.get("total_capital", 10000.0),
+            "paper_trading": global_config.get("paper_trading", True)
+        }
+        return {"success": True, "data": status_data}
     except Exception as e:
         enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.API, f"Error loading config for status: {e}")
-        return SystemStatus(
-            running=False,
-            uptime="0:00:00",
-            total_capital=10000.0,
-            paper_trading=True
-        )
+        status_data = {
+            "running": False,
+            "uptime": "0:00:00",
+            "total_capital": 10000.0,
+            "paper_trading": True
+        }
+        return {"success": True, "data": status_data}
 
-@app.get("/api/metrics", response_model=PerformanceMetrics)
+@app.get("/api/metrics")
 async def get_performance_metrics():
     """Get current performance metrics."""
     global trading_system
@@ -257,28 +260,30 @@ async def get_performance_metrics():
                         drawdown = (peak_pnl - running_pnl) / peak_pnl
                         max_drawdown = max(max_drawdown, drawdown)
         
-        return PerformanceMetrics(
-            total_pnl=total_pnl,
-            total_roi=total_roi,
-            daily_pnl=total_pnl,  # Simplified - using total as daily
-            active_trades=active_trades,
-            win_rate=win_rate,
-            total_trades=total_trades,
-            max_drawdown=max_drawdown
-        )
+        metrics_data = {
+            "total_pnl": total_pnl,
+            "total_roi": total_roi,
+            "daily_pnl": total_pnl,  # Simplified - using total as daily
+            "active_trades": active_trades,
+            "win_rate": win_rate,
+            "total_trades": total_trades,
+            "max_drawdown": max_drawdown
+        }
+        return {"success": True, "data": metrics_data}
     
     # Return demo data if system not running
-    return PerformanceMetrics(
-        total_pnl=0.0,
-        total_roi=0.0,
-        daily_pnl=0.0,
-        active_trades=0,
-        win_rate=0.0,
-        total_trades=0,
-        max_drawdown=0.0
-    )
+    metrics_data = {
+        "total_pnl": 0.0,
+        "total_roi": 0.0,
+        "daily_pnl": 0.0,
+        "active_trades": 0,
+        "win_rate": 0.0,
+        "total_trades": 0,
+        "max_drawdown": 0.0
+    }
+    return {"success": True, "data": metrics_data}
 
-@app.get("/api/bots", response_model=Dict[str, List[BotStatus]])
+@app.get("/api/bots")
 async def get_bot_status():
     """Get status of all trading bots."""
     global trading_system
@@ -293,14 +298,14 @@ async def get_bot_status():
             bot_trades = [t for t in trading_system.trade_history if t.symbol == config.symbol]
             bot_pnl = sum([t.pnl for t in bot_trades if t.pnl])
             
-            bots.append(BotStatus(
-                symbol=config.symbol,
-                timeframe=config.timeframe,
-                status="running" if config.enabled else "paused",
-                pnl=bot_pnl,
-                trades=len(bot_trades),
-                enabled=config.enabled
-            ))
+            bots.append({
+                "symbol": config.symbol,
+                "timeframe": config.timeframe,
+                "status": "running" if config.enabled else "paused",
+                "pnl": bot_pnl,
+                "trades": len(bot_trades),
+                "enabled": config.enabled
+            })
     else:
         # System is not running - get configured bots from config file
         try:
@@ -308,20 +313,20 @@ async def get_bot_status():
             bot_configs = config_data.get("bot_configs", [])
             
             for i, bot_config in enumerate(bot_configs):
-                bots.append(BotStatus(
-                    symbol=bot_config.get("symbol", ""),
-                    timeframe=bot_config.get("timeframe", ""),
-                    status="stopped" if bot_config.get("enabled", False) else "disabled",
-                    pnl=0.0,  # No PnL data when system is stopped
-                    trades=0,  # No trade data when system is stopped
-                    enabled=bot_config.get("enabled", False)
-                ))
+                bots.append({
+                    "symbol": bot_config.get("symbol", ""),
+                    "timeframe": bot_config.get("timeframe", ""),
+                    "status": "stopped" if bot_config.get("enabled", False) else "disabled",
+                    "pnl": 0.0,  # No PnL data when system is stopped
+                    "trades": 0,  # No trade data when system is stopped
+                    "enabled": bot_config.get("enabled", False)
+                })
         except Exception as e:
             enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.API, f"Error loading bot configs: {e}")
     
-    return {"bots": bots}
+    return {"success": True, "data": {"bots": bots}}
 
-@app.get("/api/trades/recent", response_model=Dict[str, List[TradeInfo]])
+@app.get("/api/trades/recent")
 async def get_recent_trades():
     """Get recent trades."""
     global trading_system
@@ -331,35 +336,35 @@ async def get_recent_trades():
         trades = []
         
         for trade in recent_trades:
-            trades.append(TradeInfo(
-                symbol=trade.symbol,
-                direction="LONG" if trade.direction == 1 else "SHORT",
-                pnl=trade.pnl or 0.0,
-                status=trade.status,
-                time=datetime.fromtimestamp(trade.entry_time / 1000).strftime("%H:%M"),
-                entry_price=trade.entry_price,
-                exit_price=trade.exit_price
-            ))
+            trades.append({
+                "symbol": trade.symbol,
+                "direction": "LONG" if trade.direction == 1 else "SHORT",
+                "pnl": trade.pnl or 0.0,
+                "status": trade.status,
+                "time": datetime.fromtimestamp(trade.entry_time / 1000).strftime("%H:%M"),
+                "entry_price": trade.entry_price,
+                "exit_price": trade.exit_price
+            })
         
-        return {"trades": trades}
+        return {"success": True, "data": {"trades": trades}}
     
     # Return empty data when system is not running
-    return {"trades": []}
+    return {"success": True, "data": {"trades": []}}
 
-@app.get("/api/equity", response_model=Dict[str, List[EquityPoint]])
+@app.get("/api/equity")
 async def get_equity_curve():
     """Get equity curve data."""
     global trading_system
     
     if trading_system and trading_system.equity_curve:
         equity_points = [
-            EquityPoint(timestamp=point['timestamp'], equity=point['equity'])
+            {"timestamp": point['timestamp'], "equity": point['equity']}
             for point in trading_system.equity_curve[-100:]  # Last 100 points
         ]
-        return {"equity_curve": equity_points}
+        return {"success": True, "data": {"equity_curve": equity_points}}
     
     # Return empty data when system is not running
-    return {"equity_curve": []}
+    return {"success": True, "data": {"equity_curve": []}}
 
 
 
@@ -622,7 +627,7 @@ async def get_system_logs():
     try:
         # Return in-memory logs first
         if system_logs:
-            return {"logs": system_logs}
+            return {"success": True, "data": {"logs": system_logs}}
         
         # Fallback to file logs if no in-memory logs
         if os.path.exists("trading_system.log"):
@@ -668,10 +673,10 @@ async def get_system_logs():
                                     "source": name_part
                                 })
                 
-                return {"logs": parsed_logs}
+                return {"success": True, "data": {"logs": parsed_logs}}
         
         # Return empty logs if no file exists
-        return {"logs": []}
+        return {"success": True, "data": {"logs": []}}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read logs: {str(e)}")
 
@@ -934,7 +939,7 @@ async def get_available_symbols():
         "UNI/USDT", "LTC/USDT", "ATOM/USDT", "ALGO/USDT", "VET/USDT",
         "FTM/USDT", "NEAR/USDT", "SAND/USDT", "MANA/USDT", "CRV/USDT"
     ]
-    return {"symbols": symbols}
+    return {"success": True, "data": {"symbols": symbols}}
 
 @app.get("/api/bots/available-timeframes")
 async def get_available_timeframes():
@@ -948,7 +953,7 @@ async def get_available_timeframes():
         {"value": "4h", "label": "4 Hours"},
         {"value": "1d", "label": "1 Day"}
     ]
-    return {"timeframes": timeframes}
+    return {"success": True, "data": {"timeframes": timeframes}}
 
 @app.post("/api/bots/add")
 async def add_bot_configuration(bot_config: NewBotConfig):
@@ -1116,11 +1121,11 @@ async def get_bot_count():
         else:
             bot_count = 0
         
-        return {
+        return {"success": True, "data": {
             "current_count": bot_count,
             "maximum_allowed": 5,
             "can_add_more": bot_count < 5
-        }
+        }}
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get bot count: {str(e)}")
