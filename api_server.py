@@ -158,12 +158,25 @@ async def get_system_status():
             paper_trading=trading_system.global_config.paper_trading
         )
     
-    return SystemStatus(
-        running=False,
-        uptime="0:00:00",
-        total_capital=10000.0,
-        paper_trading=True
-    )
+    # System is not running - get values from config file
+    try:
+        config_data = config_manager.get_configuration_dict()
+        global_config = config_data.get("global_config", {})
+        
+        return SystemStatus(
+            running=False,
+            uptime="0:00:00",
+            total_capital=global_config.get("total_capital", 10000.0),
+            paper_trading=global_config.get("paper_trading", True)
+        )
+    except Exception as e:
+        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.API, f"Error loading config for status: {e}")
+        return SystemStatus(
+            running=False,
+            uptime="0:00:00",
+            total_capital=10000.0,
+            paper_trading=True
+        )
 
 @app.get("/api/metrics", response_model=PerformanceMetrics)
 async def get_performance_metrics():
@@ -232,8 +245,10 @@ async def get_bot_status():
     """Get status of all trading bots."""
     global trading_system
     
+    bots = []
+    
     if trading_system:
-        bots = []
+        # System is running - get live data
         # bot_configs is a dictionary {bot_id: BotConfig}
         for bot_id, config in trading_system.bot_configs.items():
             # Calculate bot-specific PnL
@@ -248,11 +263,25 @@ async def get_bot_status():
                 trades=len(bot_trades),
                 enabled=config.enabled
             ))
-        
-        return {"bots": bots}
+    else:
+        # System is not running - get configured bots from config file
+        try:
+            config_data = config_manager.get_configuration_dict()
+            bot_configs = config_data.get("bot_configs", [])
+            
+            for i, bot_config in enumerate(bot_configs):
+                bots.append(BotStatus(
+                    symbol=bot_config.get("symbol", ""),
+                    timeframe=bot_config.get("timeframe", ""),
+                    status="stopped" if bot_config.get("enabled", False) else "disabled",
+                    pnl=0.0,  # No PnL data when system is stopped
+                    trades=0,  # No trade data when system is stopped
+                    enabled=bot_config.get("enabled", False)
+                ))
+        except Exception as e:
+            enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.API, f"Error loading bot configs: {e}")
     
-    # Return empty data when system is not running
-    return {"bots": []}
+    return {"bots": bots}
 
 @app.get("/api/trades/recent", response_model=Dict[str, List[TradeInfo]])
 async def get_recent_trades():
@@ -294,23 +323,7 @@ async def get_equity_curve():
     # Return empty data when system is not running
     return {"equity_curve": []}
 
-@app.get("/api/logs", response_model=Dict[str, List[SystemLog]])
-async def get_system_logs():
-    """Get recent system logs."""
-    global system_logs
-    
-    # Convert to SystemLog objects
-    logs = [
-        SystemLog(
-            timestamp=log["timestamp"],
-            level=log["level"],
-            message=log["message"],
-            source=log["source"]
-        )
-        for log in system_logs
-    ]
-    
-    return {"logs": logs}
+
 
 @app.put("/api/bots/{bot_id}/config")
 async def update_bot_config(bot_id: str, config: BotConfigUpdate):
@@ -450,7 +463,7 @@ async def start_system(background_tasks: BackgroundTasks):
         system_task = asyncio.create_task(trading_system.start())
         
         add_system_log("SUCCESS", "Trading system started successfully", "api")
-        return {"message": "Trading system started successfully"}
+        return {"success": True, "message": "Trading system started successfully"}
     except Exception as e:
         add_system_log("ERROR", f"Failed to start system: {str(e)}", "api")
         raise HTTPException(status_code=500, detail=f"Failed to start system: {str(e)}")
@@ -474,7 +487,7 @@ async def stop_system():
             await trading_system._shutdown()
         
         add_system_log("SUCCESS", "Trading system stopped successfully", "api")
-        return {"message": "Trading system stopped successfully"}
+        return {"success": True, "message": "Trading system stopped successfully"}
     except Exception as e:
         add_system_log("ERROR", f"Failed to stop system: {str(e)}", "api")
         raise HTTPException(status_code=500, detail=f"Failed to stop system: {str(e)}")
@@ -491,7 +504,7 @@ async def emergency_stop():
         if trading_system:
             await trading_system._emergency_shutdown()
         
-        return {"message": "Emergency stop executed successfully"}
+        return {"success": True, "message": "Emergency stop executed successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Emergency stop failed: {str(e)}")
 
@@ -574,9 +587,36 @@ async def get_system_logs():
                 lines = f.readlines()
                 # Return last 100 lines
                 recent_logs = lines[-100:] if len(lines) > 100 else lines
-                return {"logs": [line.strip() for line in recent_logs]}
+                
+                # Parse logs into structured format
+                parsed_logs = []
+                for line in recent_logs:
+                    line = line.strip()
+                    if line:
+                        # Try to parse format: "YYYY-MM-DD HH:MM:SS - LEVEL - MESSAGE"
+                        parts = line.split(' - ', 2)
+                        if len(parts) >= 3:
+                            timestamp = parts[0]
+                            level = parts[1]
+                            message = parts[2]
+                            source = "system"
+                        else:
+                            # Fallback for unparseable lines
+                            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            level = "INFO"
+                            message = line
+                            source = "system"
+                        
+                        parsed_logs.append({
+                            "timestamp": timestamp,
+                            "level": level,
+                            "message": message,
+                            "source": source
+                        })
+                
+                return {"logs": parsed_logs}
         
-        return {"logs": ["No logs available"]}
+        return {"logs": []}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read logs: {str(e)}")
 

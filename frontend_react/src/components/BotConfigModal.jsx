@@ -36,7 +36,8 @@ export default function BotConfigModal({ bot, isOpen, onClose, onSave }) {
     risk_per_trade: 0.02,
     max_positions: 3,
     stop_loss: 0.02,
-    take_profit: 0.04
+    take_profit: 0.04,
+    confidence_threshold: 0.6
   });
   const [loading, setSaving] = useState(false);
   const [customSymbol, setCustomSymbol] = useState('');
@@ -51,7 +52,8 @@ export default function BotConfigModal({ bot, isOpen, onClose, onSave }) {
         risk_per_trade: bot.risk_per_trade || 0.02,
         max_positions: bot.max_positions || 3,
         stop_loss: bot.stop_loss || 0.02,
-        take_profit: bot.take_profit || 0.04
+        take_profit: bot.take_profit || 0.04,
+        confidence_threshold: bot.confidence_threshold || 0.6
       });
       setShowCustomSymbol(!POPULAR_SYMBOLS.includes(bot.symbol));
       setCustomSymbol(POPULAR_SYMBOLS.includes(bot.symbol) ? '' : bot.symbol);
@@ -226,6 +228,25 @@ export default function BotConfigModal({ bot, isOpen, onClose, onSave }) {
                 step="0.1"
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
               />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                ML Confidence Threshold (%)
+                <span className="text-xs text-gray-500 ml-1">(Higher = more conservative)</span>
+              </label>
+              <input
+                type="number"
+                value={config.confidence_threshold * 100}
+                onChange={(e) => setConfig({ ...config, confidence_threshold: parseFloat(e.target.value) / 100 })}
+                min="30"
+                max="90"
+                step="1"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Controls how confident the ML model must be before making trades. Higher values = fewer but more confident trades.
+              </p>
             </div>
           </div>
 
