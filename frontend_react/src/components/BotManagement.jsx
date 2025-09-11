@@ -364,14 +364,16 @@ export default function BotManagement({ bots, onBotsChange }) {
         const response = await apiService.updateBot(editingIndex, botData);
         if (response.success) {
           notificationService.success('Bot updated successfully');
-          onBotsChange();
+          await loadBotCount(); // Update count immediately
+          await onBotsChange(); // Trigger parent refresh
         }
       } else {
         // Add new bot
         const response = await apiService.addBot(botData);
         if (response.success) {
           notificationService.success('Bot added successfully');
-          onBotsChange();
+          await loadBotCount(); // Update count immediately
+          await onBotsChange(); // Trigger parent refresh
         }
       }
     } catch (error) {
@@ -390,7 +392,8 @@ export default function BotManagement({ bots, onBotsChange }) {
       const response = await apiService.removeBot(index);
       if (response.success) {
         notificationService.success('Bot removed successfully');
-        onBotsChange();
+        await loadBotCount(); // Update count immediately
+        await onBotsChange(); // Trigger parent refresh
       }
     } catch (error) {
       console.error('Error removing bot:', error);
@@ -403,7 +406,7 @@ export default function BotManagement({ bots, onBotsChange }) {
       const response = await apiService.updateBot(index, { enabled });
       if (response.success) {
         notificationService.success(`Bot ${enabled ? 'enabled' : 'disabled'} successfully`);
-        onBotsChange();
+        await onBotsChange(); // Trigger parent refresh
       }
     } catch (error) {
       console.error('Error toggling bot:', error);

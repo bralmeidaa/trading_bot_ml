@@ -46,30 +46,18 @@ const LogViewer = () => {
   const loadLogs = async (customFilters = null) => {
     try {
       setLoading(true);
-      const queryFilters = customFilters || filters;
       
-      // Build query parameters
-      const params = new URLSearchParams();
-      Object.entries(queryFilters).forEach(([key, value]) => {
-        if (value && value !== '') {
-          if (key.includes('date') && value) {
-            // Convert date to ISO format
-            params.append(key, new Date(value).toISOString());
-          } else {
-            params.append(key, value);
-          }
-        }
-      });
-
-      const response = await apiService.get(`/logs/enhanced?${params.toString()}`);
+      const response = await apiService.getLogs();
       if (response.success) {
-        setLogs(response.data.logs || []);
+        setLogs(response.data?.logs || response.logs || []);
       } else {
-        throw new Error(response.error);
+        throw new Error(response.error || 'Failed to load logs');
       }
     } catch (error) {
       showNotification('Failed to load logs', 'error');
       console.error('Error loading logs:', error);
+      // Set empty logs array on error
+      setLogs([]);
     } finally {
       setLoading(false);
     }
@@ -83,6 +71,13 @@ const LogViewer = () => {
       }
     } catch (error) {
       console.error('Error loading log statistics:', error);
+      // Set default statistics if endpoint doesn't exist
+      setStatistics({
+        total_logs_in_buffer: 0,
+        disk_usage: { total_mb: 0 },
+        recent_activity: {},
+        log_levels: {}
+      });
     }
   };
 
@@ -94,6 +89,11 @@ const LogViewer = () => {
       }
     } catch (error) {
       console.error('Error loading log categories:', error);
+      // Set default categories if endpoint doesn't exist
+      setCategories({
+        levels: ['INFO', 'WARNING', 'ERROR', 'DEBUG'],
+        categories: ['TRADING', 'SIGNAL', 'RISK', 'CONFIG', 'API']
+      });
     }
   };
 
@@ -122,31 +122,20 @@ const LogViewer = () => {
     try {
       setExporting(true);
       
-      const params = new URLSearchParams();
-      if (filters.start_date) params.append('start_date', new Date(filters.start_date).toISOString());
-      if (filters.end_date) params.append('end_date', new Date(filters.end_date).toISOString());
-      params.append('format', selectedExportFormat);
-
-      const response = await fetch(`/api/logs/export?${params.toString()}`, {
-        method: 'POST'
-      });
-
-      if (response.ok) {
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = url;
-        a.download = `trading_logs_${new Date().toISOString().split('T')[0]}.${selectedExportFormat}`;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
-        
-        showNotification('Logs exported successfully', 'success');
-      } else {
-        throw new Error('Export failed');
-      }
+      // Simple export by downloading current logs as JSON
+      const dataStr = JSON.stringify(filteredLogs, null, 2);
+      const dataBlob = new Blob([dataStr], { type: 'application/json' });
+      const url = window.URL.createObjectURL(dataBlob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = `trading_logs_${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
+      showNotification('Logs exported successfully', 'success');
     } catch (error) {
       showNotification('Failed to export logs', 'error');
       console.error('Error exporting logs:', error);
@@ -435,7 +424,12 @@ const LogEntry = ({ log }) => {
   const [expanded, setExpanded] = useState(false);
 
   const formatTimestamp = (timestamp) => {
-    return new Date(timestamp).toLocaleString();
+    if (!timestamp) return 'N/A';
+    try {
+      return new Date(timestamp).toLocaleString();
+    } catch (e) {
+      return timestamp;
+    }
   };
 
   const getLevelColor = (level) => {
@@ -479,12 +473,14 @@ const LogEntry = ({ log }) => {
             <span className="text-xs font-mono text-gray-500">
               {formatTimestamp(log.timestamp)}
             </span>
-            <span className={`px-2 py-1 rounded text-xs font-medium ${getLevelColor(log.level)}`}>
-              {log.level}
+            <span className={`px-2 py-1 rounded text-xs font-medium ${getLevelColor(log.level || log.levelname || 'INFO')}`}>
+              {log.level || log.levelname || 'INFO'}
             </span>
-            <span className={`px-2 py-1 rounded text-xs font-medium ${getCategoryColor(log.category)}`}>
-              {log.category}
-            </span>
+            {(log.category || log.name) && (
+              <span className={`px-2 py-1 rounded text-xs font-medium ${getCategoryColor(log.category || log.name)}`}>
+                {log.category || log.name}
+              </span>
+            )}
             {log.bot_id && (
               <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs">
                 {log.bot_id}
@@ -501,7 +497,7 @@ const LogEntry = ({ log }) => {
               </span>
             )}
           </div>
-          <p className="text-sm text-gray-900 mb-2">{log.message}</p>
+          <p className="text-sm text-gray-900 mb-2">{log.message || log.msg || JSON.stringify(log)}</p>
           
           {log.data && (
             <div className="mt-2">

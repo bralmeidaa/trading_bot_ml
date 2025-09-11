@@ -25,16 +25,21 @@ export default function Header() {
           if (window.confirm('Are you sure you want to perform an emergency stop? This will immediately close all positions.')) {
             result = await apiService.emergencyStop();
           } else {
+            setActionLoading(null);
             return;
           }
           break;
         default:
+          setActionLoading(null);
           return;
       }
 
       if (result.success) {
         notificationService.success(`System ${actionName} successful`);
-        refetch();
+        // Wait a moment for the system to update its state
+        setTimeout(async () => {
+          await refetch();
+        }, 1000);
       } else {
         notificationService.error(`Failed to ${actionName} system: ${result.error}`);
       }
@@ -113,7 +118,7 @@ export default function Header() {
               {!isRunning ? (
                 <button
                   onClick={() => handleSystemAction('start', 'start')}
-                  disabled={actionLoading === 'start'}
+                  disabled={actionLoading !== null}
                   className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
                 >
                   {actionLoading === 'start' ? (
@@ -126,11 +131,11 @@ export default function Header() {
               ) : (
                 <button
                   onClick={() => handleSystemAction('stop', 'stop')}
-                  disabled={actionLoading === 'stop'}
-                  className="btn-secondary flex items-center space-x-2"
+                  disabled={actionLoading !== null}
+                  className="bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
                 >
                   {actionLoading === 'stop' ? (
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600"></div>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
                   ) : (
                     <Square className="h-4 w-4" />
                   )}
@@ -140,7 +145,7 @@ export default function Header() {
 
               <button
                 onClick={() => handleSystemAction('emergency', 'emergency stop')}
-                disabled={actionLoading === 'emergency'}
+                disabled={actionLoading !== null || !isRunning}
                 className="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
               >
                 {actionLoading === 'emergency' ? (

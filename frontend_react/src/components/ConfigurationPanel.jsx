@@ -203,7 +203,8 @@ export default function ConfigurationPanel() {
       
       if (result.success) {
         notificationService.success('Configuration saved successfully');
-        refetch();
+        // Don't refetch immediately to avoid resetting the UI state
+        // The configuration is already saved and the UI is in sync
       } else {
         notificationService.error(`Failed to save configuration: ${result.error}`);
       }
@@ -393,10 +394,17 @@ export default function ConfigurationPanel() {
                   onBotsChange={async () => {
                     console.log('onBotsChange called, refetching...');
                     try {
-                      await refetch();
-                      console.log('Refetch completed');
+                      const freshConfig = await apiService.getConfig();
+                      if (freshConfig.success && freshConfig.data.bot_configs) {
+                        const processedBots = freshConfig.data.bot_configs.map((bot, index) => ({
+                          ...bot,
+                          id: bot.id || `${bot.symbol}_${bot.timeframe}_${index}`
+                        }));
+                        setBotConfigs([...processedBots]); // Force new array reference
+                        console.log('Bot configs updated:', processedBots);
+                      }
                     } catch (error) {
-                      console.error('Error during refetch:', error);
+                      console.error('Error during bot config refresh:', error);
                     }
                   }}
                 />
