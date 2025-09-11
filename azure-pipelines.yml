@@ -41,9 +41,17 @@ stages:
         targetType: 'inline'
         workingDirectory: '$(deploymentPath)'
         script: | 
-          sudo docker compose down --rmi all
-
-          sudo docker system prune -f
+          echo "🛑 Stopping and removing containers with verbose output..."
+          sudo docker compose down --rmi all -v || true
+          
+          echo "🧹 Aggressive Docker cleanup..."
+          sudo docker system prune -af --volumes
+          
+          echo "🗑️ Removing dangling images and build cache..."
+          sudo docker builder prune -af || true
+          
+          echo "📊 Docker system info after cleanup:"
+          sudo docker system df
 
     - task: Bash@3
       displayName: 'Clean deployment folder'
@@ -51,9 +59,14 @@ stages:
         targetType: 'inline'
         workingDirectory: '$(deploymentPath)'
         script: | 
-          sudo rm -r /opt/trading-bot-ml/* || true
+          echo "🧹 Cleaning deployment folder with verbose output..."
+          sudo rm -rv /opt/trading-bot-ml/* || true
 
-          sudo rm -r /opt/trading_bot_ml || true
+          sudo rm -rv /opt/trading_bot_ml || true
+          
+          echo "📁 Creating fresh deployment directory..."
+          sudo mkdir -p /opt/trading-bot-ml
+          sudo chown -R $(whoami):$(whoami) /opt/trading-bot-ml
 
     - task: CopyFiles@2
       inputs:
@@ -81,14 +94,22 @@ stages:
         workingDirectory: '$(deploymentPath)'
         script: | 
           set -e
-
+          
+          echo "🔨 Building Docker image with no cache to ensure fresh build..."
+          echo "📂 Current directory contents:"
+          ls -la
+          
+          echo "🏗️ Building image for platform linux/arm64..."
           sudo docker buildx build \
           --platform linux/arm64 \
           --tag '$(imageRepository):$(dockerImageLatestTag)' \
           --file $(dockerfilePath) \
-          --cache-from type=registry,ref=$(registryUrl)/$(imageRepository):dockerImageCacheTag \
-          --cache-to "type=registry,ref=$(registryUrl)/$(imageRepository):dockerImageCacheTag,mode=max" \
+          --no-cache \
+          --pull \
           --push .
+          
+          echo "✅ Docker image built and pushed successfully!"
+          echo "🏷️ Image tag: $(imageRepository):$(dockerImageLatestTag)"
 
     - task: Docker@2
       displayName: 'Docker Logout'
@@ -131,14 +152,20 @@ stages:
               script: | 
                 set -e
                 
-                echo "🚀 Starting new containers..."
-                sudo docker compose up -d
+                echo "🔄 Pulling latest images..."
+                sudo docker compose pull
+                
+                echo "🚀 Starting new containers with fresh images..."
+                sudo docker compose up -d --force-recreate --remove-orphans
                   
                 echo "⏳ Waiting for services to start..."
                 sleep 30
 
-                echo "Look the running containers"
+                echo "📋 Current running containers:"
                 sudo docker compose ps
+                
+                echo "📊 Container logs (last 20 lines):"
+                sudo docker compose logs --tail=20
                 
                 echo "✅ Deployment completed successfully!"
 
@@ -182,15 +209,29 @@ stages:
     displayName: 'Rollback to Previous Version'
     steps:
     - task: Bash@3
-      displayName: 'Initial Tshot steps'
+      displayName: 'Initial Troubleshooting Steps'
       inputs:   
         targetType: 'inline'
         workingDirectory: '$(deploymentPath)'
         script: | 
           set -e
           
-          echo "validating containers log..."
-          sudo docker compose logs
+          echo "🔍 Troubleshooting deployment failure..."
+          
+          echo "📊 Docker system status:"
+          sudo docker system df
+          
+          echo "📋 Current containers:"
+          sudo docker compose ps -a
+          
+          echo "📝 Container logs (last 50 lines):"
+          sudo docker compose logs --tail=50
+          
+          echo "🏗️ Image information:"
+          sudo docker images | grep trading-bot
+          
+          echo "🌐 Network connectivity test:"
+          curl -v http://localhost:12000/api/health || echo "Health check failed"
 #           echo "🔄 Starting rollback process..."
           
 #           ssh -o StrictHostKeyChecking=no $(OCI_VM_USER)@$(OCI_VM_IP) << 'EOF'
