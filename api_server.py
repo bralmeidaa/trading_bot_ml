@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import json
 import os
 import asyncio
@@ -43,6 +43,44 @@ def add_system_log(level: str, message: str, source: str = "system"):
     # Keep only last 100 logs to prevent memory issues
     if len(system_logs) > 100:
         system_logs = system_logs[-100:]
+
+def load_config_from_file() -> Tuple[GlobalConfig, List[BotConfig]]:
+    """Load configuration from trading_config.json file."""
+    try:
+        with open('trading_config.json', 'r') as f:
+            config_data = json.load(f)
+        
+        # Create GlobalConfig from file
+        global_config = GlobalConfig(
+            total_capital=config_data['global_config']['total_capital'],
+            max_concurrent_trades=config_data['global_config']['max_concurrent_trades'],
+            daily_loss_limit=config_data['global_config']['daily_loss_limit'],
+            daily_profit_target=config_data['global_config']['daily_profit_target'],
+            emergency_stop_drawdown=config_data['global_config']['emergency_stop_drawdown'],
+            paper_trading=config_data['global_config']['paper_trading']
+        )
+        
+        # Create BotConfig list from file
+        bot_configs = []
+        for bot_data in config_data['bot_configs']:
+            bot_config = BotConfig(
+                symbol=bot_data['symbol'],
+                timeframe=bot_data['timeframe'],
+                capital_allocation=bot_data['capital_allocation'],
+                max_risk_per_trade=bot_data['max_risk_per_trade'],
+                confidence_threshold=bot_data['confidence_threshold'],
+                stop_loss_pct=bot_data['stop_loss_pct'],
+                take_profit_pct=bot_data['take_profit_pct'],
+                enabled=bot_data['enabled']
+            )
+            bot_configs.append(bot_config)
+        
+        return global_config, bot_configs
+        
+    except Exception as e:
+        add_system_log("ERROR", f"Failed to load config from file: {e}", "config")
+        # Fallback to default config
+        return create_production_config()
 
 # Pydantic models for API
 class SystemStatus(BaseModel):
@@ -451,8 +489,8 @@ async def start_system(background_tasks: BackgroundTasks):
     try:
         add_system_log("INFO", "Starting trading system...", "api")
         
-        # Create system configuration
-        global_config, bot_configs = create_production_config()
+        # Create system configuration from file
+        global_config, bot_configs = load_config_from_file()
         trading_system = ProductionTradingSystem(global_config, bot_configs)
         
         add_system_log("INFO", f"System initialized with {len(bot_configs)} bots", "system")
@@ -582,40 +620,57 @@ async def update_configuration(config: dict):
 async def get_system_logs():
     """Get recent system logs."""
     try:
+        # Return in-memory logs first
+        if system_logs:
+            return {"logs": system_logs}
+        
+        # Fallback to file logs if no in-memory logs
         if os.path.exists("trading_system.log"):
             with open("trading_system.log", "r") as f:
                 lines = f.readlines()
-                # Return last 100 lines
-                recent_logs = lines[-100:] if len(lines) > 100 else lines
+                # Return last 50 lines
+                recent_logs = lines[-50:] if len(lines) > 50 else lines
                 
                 # Parse logs into structured format
                 parsed_logs = []
                 for line in recent_logs:
                     line = line.strip()
                     if line:
-                        # Try to parse format: "YYYY-MM-DD HH:MM:SS - LEVEL - MESSAGE"
-                        parts = line.split(' - ', 2)
-                        if len(parts) >= 3:
-                            timestamp = parts[0]
-                            level = parts[1]
-                            message = parts[2]
-                            source = "system"
-                        else:
-                            # Fallback for unparseable lines
-                            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            level = "INFO"
-                            message = line
-                            source = "system"
-                        
-                        parsed_logs.append({
-                            "timestamp": timestamp,
-                            "level": level,
-                            "message": message,
-                            "source": source
-                        })
+                        # Try to parse format: "YYYY-MM-DD HH:MM:SS,mmm - name - LEVEL - MESSAGE"
+                        if ' - ' in line:
+                            parts = line.split(' - ')
+                            if len(parts) >= 3:
+                                timestamp_part = parts[0]
+                                name_part = parts[1]
+                                level_part = parts[2]
+                                message_part = ' - '.join(parts[3:]) if len(parts) > 3 else level_part
+                                
+                                # Extract just the time part
+                                if ',' in timestamp_part:
+                                    timestamp = timestamp_part.split(',')[0]
+                                else:
+                                    timestamp = timestamp_part
+                                
+                                # Determine level
+                                if 'INFO' in level_part:
+                                    level = "INFO"
+                                elif 'WARNING' in level_part:
+                                    level = "WARNING"
+                                elif 'ERROR' in level_part:
+                                    level = "ERROR"
+                                else:
+                                    level = "INFO"
+                                
+                                parsed_logs.append({
+                                    "timestamp": timestamp,
+                                    "level": level,
+                                    "message": message_part,
+                                    "source": name_part
+                                })
                 
                 return {"logs": parsed_logs}
         
+        # Return empty logs if no file exists
         return {"logs": []}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read logs: {str(e)}")

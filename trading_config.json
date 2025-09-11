@@ -11,11 +11,11 @@
     {
       "symbol": "LINK/USDT",
       "timeframe": "5m",
-      "capital_allocation": 0.4,
-      "max_risk_per_trade": 0.025,
-      "confidence_threshold": 0.6,
-      "stop_loss_pct": 0.018,
-      "take_profit_pct": 0.035,
+      "capital_allocation": 0.35,
+      "max_risk_per_trade": 0.03,
+      "confidence_threshold": 0.55,
+      "stop_loss_pct": 0.02,
+      "take_profit_pct": 0.04,
       "enabled": true
     },
     {
@@ -49,7 +49,7 @@
       "enabled": true
     }
   ],
-  "last_updated": "2025-09-10T23:55:54.512262",
+  "last_updated": "2025-09-11T13:54:55.045002",
   "updated_by": "API User",
-  "update_reason": "Added new bot: ETH/USDT 1h"
+  "update_reason": "Updated bot: LINK/USDT 5m"
 }
