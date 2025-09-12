@@ -119,12 +119,12 @@ stages:
         command: 'logout'
 
 - stage: Deploy
-  displayName: 'Deploy to OCI VM'
+  displayName: 'Deploy'
   dependsOn: Build
   condition: succeeded()
   jobs:
-  - deployment: DeployToOCI
-    displayName: 'Deploy to OCI VM'
+  - deployment: DeployApp
+    displayName: 'Deploy App'
     environment: 'pre-production'  
     strategy:
       runOnce:
@@ -154,15 +154,12 @@ stages:
               workingDirectory: '$(deploymentPath)'
               targetType: 'inline'
               script: | 
-                sudo ls -lr $(serverCertificate.secureFilePath)
-                sudo ls -lr $(privateKey.secureFilePath)
+                sudo rm -rf *.pem || true
 
-                sudo rm -rf ./fullchainCert.pem ./privateKey.pem
-                
                 sudo cat $(serverCertificate.secureFilePath) $(caCertificate.secureFilePath) > ./fullchainCert.pem
 
                 #copy private key secure file
-                sudo cp --verbose $(privateKey.secureFilePath) ./privateKey.pem
+                sudo cp -p --verbose $(privateKey.secureFilePath) ./privateKey.pem
 
                 #Create env file with secrets
                 echo "🔧 Setting up environment..."
@@ -201,6 +198,14 @@ stages:
                 
                 echo "✅ Deployment completed successfully!"
 
+- stage: Testing
+  displayName: 'App validation'
+  dependsOn: Deploy
+  condition: succeeded()
+  jobs:
+  - job: URLValidation
+    displayName: 'Valide the App URLs'
+    steps:
           - task: Bash@3
             displayName: 'Verify Application Status'
             inputs:
@@ -231,11 +236,12 @@ stages:
                 echo "🎉 All verification checks passed!"
                 echo "📊 Dashboard URL: http://localhost:12000"
 
-- stage: Rollback
-  displayName: 'Rollback (Manual)'
-  dependsOn: Deploy
+                # Test nginx
+
+- stage: InitialTShoot
+  displayName: 'InitialTShoot'
+  dependsOn: Testing
   condition: failed()
-  
   jobs:
   - job: RollbackJob
     displayName: 'Rollback to Previous Version'
