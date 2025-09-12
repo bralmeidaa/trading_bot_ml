@@ -138,7 +138,7 @@ stages:
 
           - task: DownloadSecureFile@1
             name: 'privateKey'
-            displayName: Downloading Private Key File
+            displayName: 'Downloading Private Key File'
             inputs:
               secureFile: 'trading_braatech_xyz_key.pem'
 
@@ -147,7 +147,7 @@ stages:
             displayName: 'Downloading CA Certificate File'
             inputs:
               secureFile: 'zerossl_ca_bundle.pem'
-
+        
           - task: Bash@3
             displayName: 'Combine SSL Certs and Set env variables'
             inputs:
@@ -157,7 +157,7 @@ stages:
                 cat $(serverCertificate.secureFilePath) $(caCertificate.secureFilePath) > ./fullchainCert.pem
 
                 #copy private key secure file
-                cp $(privateKey.secureFilePath) ./privateKey.pem
+                cp --verbose $(privateKey.secureFilePath) privateKey.pem
 
                 #Create env file with secrets
                 echo "🔧 Setting up environment..."
@@ -166,8 +166,6 @@ stages:
                 BINANCE_API_SECRET=$(BINANCE_API_SECRET)
                 ENVIRONMENT=production
                 BUILD_ID=$(dockerImageLatestTag)
-                SSL_CERT_PATH=./fullchainCert.pem
-                SSL_KEY_PATH=./privateKey.pem
                 EOL
 
                 #Check .env creation
