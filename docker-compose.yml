@@ -44,7 +44,8 @@ services:
       - "443:443"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./ssl:/etc/nginx/ssl:ro
+      - ./fullchainCert.crt:/etc/nginx/ssl/fullchainCert.crt:ro
+      - ./privateKey.key:/etc/nginx/ssl/privateKey.key:ro
     depends_on:
       - trading-bot
     restart: unless-stopped
