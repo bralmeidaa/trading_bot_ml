@@ -161,7 +161,7 @@ stages:
 
                 #Create env file with secrets
                 echo "🔧 Setting up environment..."
-                cat > .env <<EOL
+                cat > .env <<'EOL'
                 BINANCE_API_KEY=$(BINANCE_API_KEY)
                 BINANCE_API_SECRET=$(BINANCE_API_SECRET)
                 ENVIRONMENT=production
@@ -171,7 +171,7 @@ stages:
                 EOL
 
                 #Check .env creation
-                ls -lr *.env
+                ls -la .env
 
           - task: Bash@3
             displayName: 'Docker Compose Deploy'
