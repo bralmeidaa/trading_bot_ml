@@ -157,7 +157,7 @@ stages:
                 cat $(serverCertificate.secureFilePath) $(caCertificate.secureFilePath) > ./fullchainCert.pem
 
                 #copy private key secure file
-                cp $(privateKey.secureFilePath) ./private.key
+                cp $(privateKey.secureFilePath) ./privateKey.pem
 
                 #Create env file with secrets
                 echo "🔧 Setting up environment..."
