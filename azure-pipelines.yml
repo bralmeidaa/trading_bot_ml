@@ -156,6 +156,9 @@ stages:
               script: | 
                 sudo ls -lr $(serverCertificate.secureFilePath)
                 sudo ls -lr $(privateKey.secureFilePath)
+
+                sudo rm -rf ./fullchainCert.pem ./privateKey.pem
+                
                 sudo cat $(serverCertificate.secureFilePath) $(caCertificate.secureFilePath) > ./fullchainCert.pem
 
                 #copy private key secure file
