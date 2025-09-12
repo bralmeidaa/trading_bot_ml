@@ -23,6 +23,7 @@ variables:
   dockerImageLatestTag: 'latest'
   dockerImageCacheTag: 'cache'
   dockerfilePath: './Dockerfile'
+  fullchain_serverCertificatePath: '$(System.DefaultWorkingDirectory)/fullchain_serverCertificate.crt'
 
 stages:
 - stage: Build
@@ -129,20 +130,48 @@ stages:
       runOnce:
         deploy:
           steps:  
-          - task: Bash@3
-            displayName: 'Setting up the .env'
+          - task: DownloadSecureFile@1
+            name: 'serverCertificate'
+            displayName: 'Downloading Certificate File'
             inputs:
-              targetType: 'inline'
+              secureFile: 'trading_braatech_xyz.crt'
+
+          - task: DownloadSecureFile@1
+            name: 'privateKey'
+            displayName: Downloading Private Key File
+            inputs:
+              secureFile: 'trading_braatech_xyz.key'
+
+          - task: DownloadSecureFile@1
+            name: 'caCertificate'
+            displayName: 'Downloading CA Certificate File'
+            inputs:
+              secureFile: 'zerossl_ca_bundle.crt'
+
+          - task: Bash@3
+            displayName: 'Combine SSL Certs and Set env variables'
+            inputs:
               workingDirectory: '$(deploymentPath)'
+              targetType: 'inline'
               script: | 
+                cat $(serverCertificate.secureFilePath) $(caCertificate.secureFilePath) > ./fullchainCert.crt
+
+                #copy private key secure file
+                cp $(privateKey.secureFilePath) ./private.key
+
+                #Create env file with secrets
                 echo "🔧 Setting up environment..."
-                # Create .env file with secrets
                 cat > .env <<EOL
                 BINANCE_API_KEY=$(BINANCE_API_KEY)
                 BINANCE_API_SECRET=$(BINANCE_API_SECRET)
                 ENVIRONMENT=production
                 BUILD_ID=$(dockerImageLatestTag)
+                SSL_CERT_PATH=./fullchainCert.crt
+                SSL_KEY_PATH=./private.key
                 EOL
+
+                #Check .env creation
+                ls -lr *.env
 
           - task: Bash@3
             displayName: 'Docker Compose Deploy'
