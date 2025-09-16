@@ -37,11 +37,17 @@ export function useApi(apiCall, dependencies = [], interval = null) {
 }
 
 export function useSystemStatus() {
-  return useApi(() => apiService.getSystemStatus(), [], 5000);
+  const { data, ...rest } = useApi(() => apiService.getSystemStatus(), [], 5000);
+  
+  // "Desembrulha" os dados do status de dentro do objeto 'data'
+  return { data: data || {}, ...rest };
 }
 
 export function useMetrics() {
-  return useApi(() => apiService.getMetrics(), [], 5000);
+  const { data, ...rest } = useApi(() => apiService.getMetrics(), [], 5000);
+  
+  // "Desembrulha" os dados das métricas de dentro do objeto 'data'
+  return { data: data || {}, ...rest };
 }
 
 //export function useEquity() {
@@ -84,5 +90,8 @@ export function useLogs() {
 }
 
 export function useConfig() {
-  return useApi(() => apiService.getConfig(), [], null);
+  const { data, ...rest } = useApi(() => apiService.getConfig(), [], null);
+  
+  // "Desembrulha" os dados da configuração de dentro do objeto 'data'
+  return { data: data || {}, ...rest };
 }

@@ -324,7 +324,9 @@ export default function BotManagement({ bots, onBotsChange }) {
   const loadAvailableSymbols = async () => {
     try {
       const response = await apiService.getAvailableSymbols();
-      if (response.symbols) {
+      if (response.data?.symbols) {
+        setAvailableSymbols(response.data.symbols);
+      } else if (response.symbols) {
         setAvailableSymbols(response.symbols);
       }
     } catch (error) {
@@ -336,7 +338,7 @@ export default function BotManagement({ bots, onBotsChange }) {
   const loadBotCount = async () => {
     try {
       const response = await apiService.getBotCount();
-      setBotCount(response);
+      setBotCount(response.data || response);
     } catch (error) {
       console.error('Error loading bot count:', error);
     }
