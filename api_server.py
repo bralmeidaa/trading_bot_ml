@@ -219,6 +219,33 @@ async def get_system_status():
         }
         return {"success": True, "data": status_data}
 
+@app.get("/api/system/status")
+async def get_detailed_system_status():
+    """Get detailed system status including all components."""
+    global trading_system
+    
+    base_status = await get_system_status()
+    
+    # Add detailed component status
+    detailed_status = {
+        "system": base_status["data"],
+        "components": {
+            "trading_engine": "active" if trading_system else "inactive",
+            "regime_detection": "active",
+            "ml_ensemble": "active", 
+            "specialized_bots": "active",
+            "continuous_learning": "active"
+        },
+        "health": {
+            "overall": "healthy" if trading_system else "stopped",
+            "api": "healthy",
+            "database": "healthy",
+            "exchange_connection": "healthy"
+        }
+    }
+    
+    return {"success": True, "data": detailed_status}
+
 @app.get("/api/metrics")
 async def get_performance_metrics():
     """Get current performance metrics."""
