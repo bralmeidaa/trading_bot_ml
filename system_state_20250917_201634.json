@@ -1,0 +1,33 @@
+{
+  "timestamp": "2025-09-17T20:16:34.022704",
+  "total_pnl": -0.0023710394467013995,
+  "daily_pnl": -0.0023710394467013995,
+  "active_trades": [],
+  "trade_history": [
+    {
+      "id": "ETH/USDT_1758140193",
+      "symbol": "ETH/USDT",
+      "direction": -1,
+      "entry_time": 1758140193614,
+      "entry_price": 4534.97,
+      "quantity": 0.11855197233787336,
+      "stop_loss": 4595.702857142857,
+      "take_profit": 4433.748571428571,
+      "exit_time": 1758140194022,
+      "exit_price": 4534.99,
+      "pnl": -0.0023710394467013995,
+      "pnl_pct": -4.410172503793203e-06,
+      "status": "closed",
+      "reason": "system_shutdown"
+    }
+  ],
+  "daily_stats": [],
+  "equity_curve": [
+    {
+      "timestamp": 1758140193614,
+      "equity": 1200.0,
+      "active_trades": 1,
+      "daily_pnl": 0.0
+    }
+  ]
+}

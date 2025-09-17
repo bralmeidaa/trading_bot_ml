@@ -1,0 +1,128 @@
+{
+  "test_duration_hours": 0.034735556642214456,
+  "total_signals_generated": 0,
+  "total_trades_entered": 7,
+  "total_trades_completed": 7,
+  "total_pnl": -17.475474843973622,
+  "win_rate": 0.2857142857142857,
+  "avg_trade_duration_minutes": 0.1863142857142857,
+  "max_concurrent_trades": 2,
+  "sharpe_ratio": -8.39592370634553,
+  "max_drawdown": 0.02488308152823624,
+  "daily_stats": [
+    {
+      "hour": 1,
+      "total_pnl": -5.87662168643726,
+      "equity": 1194.1233783135629,
+      "completed_trades": 3,
+      "active_trades": 1
+    },
+    {
+      "hour": 2,
+      "total_pnl": -12.92696485009338,
+      "equity": 1187.0730351499067,
+      "completed_trades": 4,
+      "active_trades": 1
+    },
+    {
+      "hour": 3,
+      "total_pnl": -28.836246098178428,
+      "equity": 1171.1637539018216,
+      "completed_trades": 6,
+      "active_trades": 0
+    },
+    {
+      "hour": 4,
+      "total_pnl": -17.475474843973622,
+      "equity": 1182.5245251560264,
+      "completed_trades": 7,
+      "active_trades": 0
+    },
+    {
+      "hour": 5,
+      "total_pnl": -17.475474843973622,
+      "equity": 1182.5245251560264,
+      "completed_trades": 7,
+      "active_trades": 0
+    },
+    {
+      "hour": 6,
+      "total_pnl": -17.475474843973622,
+      "equity": 1182.5245251560264,
+      "completed_trades": 7,
+      "active_trades": 0
+    }
+  ],
+  "trade_details": [
+    {
+      "symbol": "LINK/USDT",
+      "direction": -1,
+      "entry_price": 23.71,
+      "exit_price": 23.564004978195932,
+      "pnl": 16.351442442056076,
+      "pnl_pct": 0.006157529388615304,
+      "reason": "take_profit",
+      "duration_minutes": 0.2719666666666667
+    },
+    {
+      "symbol": "BTC/USDT",
+      "direction": -1,
+      "entry_price": 116136.0,
+      "exit_price": 116603.31360626357,
+      "pnl": -15.301874214577127,
+      "pnl_pct": -0.00402384795639229,
+      "reason": "stop_loss",
+      "duration_minutes": 0.17568333333333333
+    },
+    {
+      "symbol": "LINK/USDT",
+      "direction": -1,
+      "entry_price": 23.71,
+      "exit_price": 23.769592218415188,
+      "pnl": -6.926189913916208,
+      "pnl_pct": -0.0025133790980677645,
+      "reason": "stop_loss",
+      "duration_minutes": 0.04791666666666667
+    },
+    {
+      "symbol": "LINK/USDT",
+      "direction": -1,
+      "entry_price": 23.7,
+      "exit_price": 23.761804956304776,
+      "pnl": -7.05034316365612,
+      "pnl_pct": -0.0026078040634926677,
+      "reason": "stop_loss",
+      "duration_minutes": 0.1438
+    },
+    {
+      "symbol": "LINK/USDT",
+      "direction": -1,
+      "entry_price": 23.69,
+      "exit_price": 23.772098984776903,
+      "pnl": -9.030888325459415,
+      "pnl_pct": -0.003465554443938456,
+      "reason": "stop_loss",
+      "duration_minutes": 0.23956666666666668
+    },
+    {
+      "symbol": "LINK/USDT",
+      "direction": -1,
+      "entry_price": 23.69,
+      "exit_price": 23.752530844751142,
+      "pnl": -6.8783929226256335,
+      "pnl_pct": -0.002639546000470274,
+      "reason": "stop_loss",
+      "duration_minutes": 0.07975
+    },
+    {
+      "symbol": "LINK/USDT",
+      "direction": -1,
+      "entry_price": 23.7,
+      "exit_price": 23.596720261325412,
+      "pnl": 11.360771254204804,
+      "pnl_pct": 0.00435779488078426,
+      "reason": "take_profit",
+      "duration_minutes": 0.3455166666666667
+    }
+  ]
+}

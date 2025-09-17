@@ -1,0 +1,16 @@
+{
+  "timestamp": "2025-09-17T20:34:29.729491",
+  "total_pnl": 0.0,
+  "daily_pnl": 0.0,
+  "active_trades": [],
+  "trade_history": [],
+  "daily_stats": [],
+  "equity_curve": [
+    {
+      "timestamp": 1758141269728,
+      "equity": 1200.0,
+      "active_trades": 0,
+      "daily_pnl": 0.0
+    }
+  ]
+}

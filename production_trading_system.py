@@ -865,7 +865,19 @@ class OptimizedSignalGenerator:
         """Combine multiple signals into one."""
         valid_signals = [s for s in signals if s is not None]
         
-        if len(valid_signals) < 2:
+        if len(valid_signals) == 0:
+            return None
+        
+        # Allow single high-confidence signals
+        if len(valid_signals) == 1:
+            signal = valid_signals[0]
+            if signal['confidence'] >= 0.7:  # High confidence threshold for single signals
+                return {
+                    'direction': signal['direction'],
+                    'strength': signal['strength'],
+                    'confidence': signal['confidence'],
+                    'metadata': {signal['type']: signal}
+                }
             return None
         
         # Weighted voting

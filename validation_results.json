@@ -1,0 +1,54 @@
+{
+  "total_trades": 21,
+  "winning_trades": 9,
+  "win_rate": 0.42857142857142855,
+  "total_pnl": 2.9505711210611567,
+  "roi_pct": 0.24588092675509637,
+  "avg_win": 8.602739762240935,
+  "avg_loss": -6.206173894925605,
+  "profit_factor": 1.3861583493937948,
+  "active_trades": 0,
+  "hourly_stats": [
+    {
+      "cycle": 10,
+      "pnl": 0.0,
+      "cycle_pnl": 0.0,
+      "trades": 0,
+      "cycle_trades": 0,
+      "active_trades": 0
+    },
+    {
+      "cycle": 20,
+      "pnl": -11.885830451790516,
+      "cycle_pnl": 0.0,
+      "trades": 2,
+      "cycle_trades": 0,
+      "active_trades": 1
+    },
+    {
+      "cycle": 30,
+      "pnl": 0.03224095595749432,
+      "cycle_pnl": -7.34616134731732,
+      "trades": 8,
+      "cycle_trades": 1,
+      "active_trades": 0
+    },
+    {
+      "cycle": 40,
+      "pnl": -33.230167146408036,
+      "cycle_pnl": -4.566393797306951,
+      "trades": 14,
+      "cycle_trades": 1,
+      "active_trades": 0
+    },
+    {
+      "cycle": 50,
+      "pnl": 2.9505711210611567,
+      "cycle_pnl": 5.707382321435636,
+      "trades": 21,
+      "cycle_trades": 1,
+      "active_trades": 0
+    }
+  ],
+  "validation_cycles": 50
+}
