@@ -1,0 +1,157 @@
+{
+  "trending_bull": {
+    "regime": "trending_bull",
+    "max_trades_per_day": 3,
+    "quality_threshold": 0.65,
+    "confidence_threshold": 0.7,
+    "risk_per_trade": 0.008,
+    "stop_loss_multiplier": 2.0,
+    "take_profit_multiplier": 4.0,
+    "position_sizing_factor": 1.2,
+    "enabled_indicators": [
+      "EMA_20",
+      "EMA_50",
+      "MACD",
+      "Volume",
+      "RSI"
+    ],
+    "strategy_type": "trend_following",
+    "entry_conditions": {
+      "trend_alignment": true,
+      "volume_confirmation": true,
+      "pullback_entry": true,
+      "rsi_range": [
+        30,
+        70
+      ]
+    },
+    "exit_conditions": {
+      "trailing_stop": true,
+      "profit_target": true,
+      "trend_reversal": true
+    },
+    "notes": "Estrat\u00e9gia agressiva para trends de alta - foco em momentum"
+  },
+  "trending_bear": {
+    "regime": "trending_bear",
+    "max_trades_per_day": 2,
+    "quality_threshold": 0.7,
+    "confidence_threshold": 0.75,
+    "risk_per_trade": 0.006,
+    "stop_loss_multiplier": 1.5,
+    "take_profit_multiplier": 3.0,
+    "position_sizing_factor": 0.8,
+    "enabled_indicators": [
+      "EMA_20",
+      "EMA_50",
+      "MACD",
+      "Volume",
+      "RSI"
+    ],
+    "strategy_type": "trend_following_short",
+    "entry_conditions": {
+      "trend_alignment": true,
+      "volume_confirmation": true,
+      "rally_entry": true,
+      "rsi_range": [
+        30,
+        70
+      ]
+    },
+    "exit_conditions": {
+      "trailing_stop": true,
+      "profit_target": true,
+      "trend_reversal": true
+    },
+    "notes": "Estrat\u00e9gia conservadora para trends de baixa - shorts em rallies"
+  },
+  "ranging": {
+    "regime": "ranging",
+    "max_trades_per_day": 4,
+    "quality_threshold": 0.75,
+    "confidence_threshold": 0.8,
+    "risk_per_trade": 0.005,
+    "stop_loss_multiplier": 1.0,
+    "take_profit_multiplier": 2.0,
+    "position_sizing_factor": 1.0,
+    "enabled_indicators": [
+      "RSI",
+      "Bollinger_Bands",
+      "Support_Resistance",
+      "Volume"
+    ],
+    "strategy_type": "mean_reversion",
+    "entry_conditions": {
+      "oversold_overbought": true,
+      "support_resistance_bounce": true,
+      "bollinger_touch": true,
+      "rsi_range": [
+        20,
+        80
+      ]
+    },
+    "exit_conditions": {
+      "mean_reversion": true,
+      "opposite_extreme": true,
+      "time_based": true
+    },
+    "notes": "Mean reversion em mercados laterais - comprar suporte/vender resist\u00eancia"
+  },
+  "high_volatility": {
+    "regime": "high_volatility",
+    "max_trades_per_day": 1,
+    "quality_threshold": 0.85,
+    "confidence_threshold": 0.85,
+    "risk_per_trade": 0.003,
+    "stop_loss_multiplier": 3.0,
+    "take_profit_multiplier": 6.0,
+    "position_sizing_factor": 0.5,
+    "enabled_indicators": [
+      "ATR",
+      "Bollinger_Bands",
+      "Volume",
+      "MACD"
+    ],
+    "strategy_type": "volatility_breakout",
+    "entry_conditions": {
+      "volatility_expansion": true,
+      "volume_spike": true,
+      "clear_direction": true,
+      "atr_filter": true
+    },
+    "exit_conditions": {
+      "volatility_contraction": true,
+      "profit_target": true,
+      "time_based": true
+    },
+    "notes": "Estrat\u00e9gia ultra-conservadora para alta volatilidade - poucos trades, alta qualidade"
+  },
+  "transitional": {
+    "regime": "transitional",
+    "max_trades_per_day": 1,
+    "quality_threshold": 0.8,
+    "confidence_threshold": 0.8,
+    "risk_per_trade": 0.004,
+    "stop_loss_multiplier": 2.0,
+    "take_profit_multiplier": 3.0,
+    "position_sizing_factor": 0.7,
+    "enabled_indicators": [
+      "EMA_20",
+      "RSI",
+      "Volume",
+      "MACD"
+    ],
+    "strategy_type": "conservative",
+    "entry_conditions": {
+      "high_confidence_only": true,
+      "multiple_confirmations": true,
+      "clear_setup": true
+    },
+    "exit_conditions": {
+      "quick_exit": true,
+      "profit_target": true,
+      "regime_change": true
+    },
+    "notes": "Estrat\u00e9gia conservadora para per\u00edodos de transi\u00e7\u00e3o - aguardar clareza"
+  }
+}

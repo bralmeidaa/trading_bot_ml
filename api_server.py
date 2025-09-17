@@ -686,7 +686,141 @@ async def health_check():
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "1.0.0"
+        "version": "2.0.0"
+    }
+
+@app.get("/api/signal-quality")
+async def get_signal_quality():
+    """Retorna dados de qualidade dos sinais."""
+    # Simulação - em produção, obter do sistema real
+    return {
+        "current_quality_score": 0.72,
+        "signals_evaluated": 45,
+        "signals_passed": 12,
+        "signals_rejected": 33,
+        "avg_quality_score": 0.68,
+        "pass_rate": 0.27,
+        "layer_scores": {
+            "technical": 0.75,
+            "market_structure": 0.68,
+            "binance_sentiment": 0.82,
+            "ml_confidence": 0.71
+        },
+        "recent_rejections": [
+            {
+                "symbol": "BTC/USDT",
+                "quality_score": 0.58,
+                "timestamp": datetime.now().isoformat(),
+                "reasons": ["Confiança ML insuficiente"]
+            },
+            {
+                "symbol": "ETH/USDT", 
+                "quality_score": 0.61,
+                "timestamp": (datetime.now() - timedelta(minutes=5)).isoformat(),
+                "reasons": ["Estrutura de mercado inadequada"]
+            }
+        ]
+    }
+
+@app.get("/api/market-sentiment/{symbol}")
+async def get_market_sentiment(symbol: str):
+    """Retorna análise de sentiment para um símbolo."""
+    # Simulação - em produção, usar BinanceAdvancedData real
+    import random
+    
+    sentiment_score = random.uniform(0.3, 0.8)
+    sentiment_label = 'bullish' if sentiment_score > 0.6 else 'bearish' if sentiment_score < 0.4 else 'neutral'
+    
+    return {
+        "sentiment_score": sentiment_score,
+        "sentiment_label": sentiment_label,
+        "confidence": random.uniform(0.7, 1.0),
+        "factors": [
+            "Funding rate neutro",
+            "Open Interest crescente" if random.random() > 0.5 else "Open Interest estável",
+            "Pressão compradora forte" if sentiment_score > 0.6 else "Pressão vendedora forte"
+        ],
+        "raw_data": {
+            "funding_rate": random.uniform(-0.001, 0.001),
+            "open_interest": {
+                "current_oi": random.uniform(50000, 100000),
+                "trend": random.choice(["increasing", "stable", "decreasing"]),
+                "change_pct": random.uniform(-5, 5)
+            },
+            "long_short_ratio": {
+                "current_ratio": random.uniform(0.8, 1.5),
+                "sentiment": random.choice(["bullish", "neutral", "bearish"])
+            },
+            "taker_data": {
+                "buy_sell_ratio": random.uniform(0.8, 1.4),
+                "trend": random.choice(["buying_pressure", "selling_pressure", "balanced"])
+            },
+            "order_book": {
+                "spread_pct": random.uniform(0.001, 0.01),
+                "sentiment": sentiment_label,
+                "imbalance": random.uniform(0.4, 0.6)
+            }
+        }
+    }
+
+@app.get("/api/market-regime/{symbol}")
+async def get_market_regime_analysis(symbol: str):
+    """Retorna análise completa de regime para um símbolo."""
+    # Simulação - em produção, usar sistema real
+    import random
+    
+    regimes = ['trending_bull', 'trending_bear', 'ranging', 'high_volatility', 'transitional']
+    regime = random.choice(regimes)
+    confidence = random.uniform(0.6, 1.0)
+    
+    # Configuração de estratégia baseada no regime
+    strategy_configs = {
+        'trending_bull': {
+            'strategy_type': 'trend_following',
+            'max_trades_per_day': 3,
+            'quality_threshold': 0.65,
+            'risk_per_trade': 0.008
+        },
+        'trending_bear': {
+            'strategy_type': 'trend_following_short',
+            'max_trades_per_day': 2,
+            'quality_threshold': 0.70,
+            'risk_per_trade': 0.006
+        },
+        'ranging': {
+            'strategy_type': 'mean_reversion',
+            'max_trades_per_day': 4,
+            'quality_threshold': 0.75,
+            'risk_per_trade': 0.005
+        },
+        'high_volatility': {
+            'strategy_type': 'volatility_breakout',
+            'max_trades_per_day': 1,
+            'quality_threshold': 0.85,
+            'risk_per_trade': 0.003
+        },
+        'transitional': {
+            'strategy_type': 'conservative',
+            'max_trades_per_day': 1,
+            'quality_threshold': 0.80,
+            'risk_per_trade': 0.004
+        }
+    }
+    
+    return {
+        'regime': regime,
+        'confidence': confidence,
+        'trend_strength': random.uniform(0.2, 0.9),
+        'volatility_level': random.uniform(0.1, 0.8),
+        'volume_profile': random.choice(['low', 'normal', 'high']),
+        'breakout_frequency': random.uniform(0.1, 0.7),
+        'regime_duration': random.randint(1, 15),
+        'factors': [
+            f"Tendência {'forte' if random.random() > 0.5 else 'fraca'}",
+            f"Volume {'alto' if random.random() > 0.5 else 'normal'}",
+            f"Volatilidade {'alta' if random.random() > 0.5 else 'baixa'}"
+        ],
+        'strategy_config': strategy_configs.get(regime, strategy_configs['transitional'])
     }
 
 # ============================================================================

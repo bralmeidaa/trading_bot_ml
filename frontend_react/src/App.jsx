@@ -7,6 +7,9 @@ import TradesAndLogs from './components/TradesAndLogs';
 import ConfigurationPanel from './components/ConfigurationPanel';
 import LogViewer from './components/LogViewer';
 import Notifications from './components/Notifications';
+import SignalQualityMonitor from './components/SignalQualityMonitor';
+import MarketSentimentPanel from './components/MarketSentimentPanel';
+import MarketRegimeMonitor from './components/MarketRegimeMonitor';
 
 function App() {
   const [activeView, setActiveView] = useState('dashboard');
@@ -24,6 +27,12 @@ function App() {
             <TradesAndLogs />
           </>
         );
+      case 'quality':
+        return <SignalQualityMonitor />;
+      case 'sentiment':
+        return <MarketSentimentPanel />;
+      case 'regime':
+        return <MarketRegimeMonitor />;
       case 'config':
         return <ConfigurationPanel />;
       case 'logs':
@@ -45,6 +54,9 @@ function App() {
           <nav className="flex space-x-8">
             {[
               { id: 'dashboard', label: 'Dashboard', icon: '📊' },
+              { id: 'quality', label: 'Signal Quality', icon: '🎯' },
+              { id: 'sentiment', label: 'Market Sentiment', icon: '📈' },
+              { id: 'regime', label: 'Market Regime', icon: '🔄' },
               { id: 'config', label: 'Configuration', icon: '⚙️' },
               { id: 'logs', label: 'Logs & Export', icon: '📋' }
             ].map((tab) => (
