@@ -145,7 +145,15 @@ const PerformanceMonitor = () => {
 
           {/* Last Updated */}
           <div className="text-xs text-gray-500 text-center">
-            Last updated: {new Date(metrics.timestamp).toLocaleTimeString()}
+            Last updated: {(() => {
+              try {
+                if (!metrics.timestamp) return 'N/A';
+                const date = new Date(metrics.timestamp);
+                return isNaN(date.getTime()) ? 'Invalid Date' : date.toLocaleTimeString();
+              } catch (e) {
+                return 'Invalid Date';
+              }
+            })()}
           </div>
         </div>
       )}

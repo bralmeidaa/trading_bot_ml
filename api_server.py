@@ -363,14 +363,30 @@ async def get_recent_trades():
         trades = []
         
         for trade in recent_trades:
+            # Safe timestamp handling
+            try:
+                if trade.entry_time and trade.entry_time > 0:
+                    # Check if timestamp is in milliseconds or seconds
+                    if trade.entry_time > 1e12:  # Milliseconds
+                        timestamp = trade.entry_time / 1000
+                    else:  # Seconds
+                        timestamp = trade.entry_time
+                    
+                    time_str = datetime.fromtimestamp(timestamp).strftime("%H:%M")
+                else:
+                    time_str = "N/A"
+            except (ValueError, OSError, OverflowError) as e:
+                time_str = "Invalid"
+                enhanced_logger.log_structured(LogLevel.WARNING, LogCategory.API, f"Invalid timestamp for trade {trade.id}: {trade.entry_time}")
+            
             trades.append({
                 "symbol": trade.symbol,
                 "direction": "LONG" if trade.direction == 1 else "SHORT",
                 "pnl": trade.pnl or 0.0,
                 "status": trade.status,
-                "time": datetime.fromtimestamp(trade.entry_time / 1000).strftime("%H:%M"),
-                "entry_price": trade.entry_price,
-                "exit_price": trade.exit_price
+                "time": time_str,
+                "entry_price": trade.entry_price or 0.0,
+                "exit_price": trade.exit_price or 0.0
             })
         
         return {"success": True, "data": {"trades": trades}}
@@ -384,10 +400,22 @@ async def get_equity_curve():
     global trading_system
     
     if trading_system and trading_system.equity_curve:
-        equity_points = [
-            {"timestamp": point['timestamp'], "equity": point['equity']}
-            for point in trading_system.equity_curve[-100:]  # Last 100 points
-        ]
+        equity_points = []
+        for point in trading_system.equity_curve[-100:]:  # Last 100 points
+            try:
+                # Validate timestamp
+                timestamp = point.get('timestamp', 0)
+                equity = point.get('equity', 0.0)
+                
+                if timestamp and timestamp > 0:
+                    equity_points.append({
+                        "timestamp": timestamp,
+                        "equity": equity
+                    })
+            except (KeyError, TypeError, ValueError) as e:
+                enhanced_logger.log_structured(LogLevel.WARNING, LogCategory.API, f"Invalid equity point: {point}")
+                continue
+        
         return {"success": True, "data": {"equity_curve": equity_points}}
     
     # Return empty data when system is not running

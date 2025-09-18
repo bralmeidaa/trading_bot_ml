@@ -37,12 +37,29 @@ export default function EquityChart() {
       };
     }
 
-    const labels = equityData.map(point => 
-      new Date(point.timestamp).toLocaleTimeString('en-US', {
-        hour: '2-digit',
-        minute: '2-digit',
-      })
-    );
+    const labels = equityData.map(point => {
+      try {
+        if (!point.timestamp || point.timestamp <= 0) {
+          return '--:--';
+        }
+        
+        // Handle both seconds and milliseconds timestamps
+        const timestamp = point.timestamp > 1e12 ? point.timestamp : point.timestamp * 1000;
+        const date = new Date(timestamp);
+        
+        if (isNaN(date.getTime())) {
+          return '--:--';
+        }
+        
+        return date.toLocaleTimeString('en-US', {
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+      } catch (error) {
+        console.warn('Invalid timestamp in equity chart:', point.timestamp, error);
+        return '--:--';
+      }
+    });
 
     const equityValues = equityData.map(point => point.equity);
     const minEquity = Math.min(...equityValues);

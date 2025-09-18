@@ -86,9 +86,18 @@ export function useEquity() {
   // 1. Pega o resultado completo do hook genérico
   const { data, ...rest } = useApi(() => apiService.getEquity(), [], 30000); // 10s → 30s
   
-  // 2. Retorna um novo objeto, substituindo 'data' pelo array desembrulhado
-  // O '...rest' mantém as outras propriedades (loading, error, etc.)
-  return { data: data?.equity_curve || [], ...rest };
+  // 2. Valida e sanitiza os dados da equity curve
+  const validatedEquityCurve = (data?.equity_curve || []).filter(point => {
+    // Remove pontos com timestamps inválidos
+    return point && 
+           typeof point.timestamp === 'number' && 
+           point.timestamp > 0 && 
+           typeof point.equity === 'number' && 
+           !isNaN(point.equity);
+  });
+  
+  // 3. Retorna um novo objeto, substituindo 'data' pelo array desembrulhado e validado
+  return { data: validatedEquityCurve, ...rest };
 }
 
 //export function useBots() {
@@ -107,8 +116,20 @@ export function useBots() {
 export function useRecentTrades() {
   const { data, ...rest } = useApi(() => apiService.getRecentTrades(), [], 30000); // 10s → 30s
   
-  // "Desembrulha" o array 'trades' de dentro do objeto 'data'
-  return { data: data?.trades || [], ...rest };
+  // "Desembrulha" o array 'trades' de dentro do objeto 'data' e valida os dados
+  const validatedTrades = (data?.trades || []).map(trade => ({
+    ...trade,
+    // Ensure all required fields have safe defaults
+    symbol: trade.symbol || 'N/A',
+    direction: trade.direction || 'N/A',
+    pnl: typeof trade.pnl === 'number' ? trade.pnl : 0,
+    status: trade.status || 'unknown',
+    time: trade.time || 'N/A',
+    entry_price: typeof trade.entry_price === 'number' ? trade.entry_price : 0,
+    exit_price: typeof trade.exit_price === 'number' ? trade.exit_price : 0
+  }));
+  
+  return { data: validatedTrades, ...rest };
 }
 
 export function useLogs() {

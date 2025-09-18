@@ -29,17 +29,41 @@ export function formatNumber(value, decimals = 2) {
 }
 
 export function formatDateTime(timestamp) {
-  if (!timestamp) return '--';
+  if (!timestamp || timestamp === 'N/A' || timestamp === 'Invalid') return '--';
   
-  const date = new Date(timestamp);
-  return new Intl.DateTimeFormat('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }).format(date);
+  try {
+    // Handle different timestamp formats
+    let date;
+    if (typeof timestamp === 'string') {
+      // If it's already a formatted time string (HH:MM), return as is
+      if (/^\d{2}:\d{2}$/.test(timestamp)) {
+        return timestamp;
+      }
+      date = new Date(timestamp);
+    } else if (typeof timestamp === 'number') {
+      // Handle both seconds and milliseconds timestamps
+      date = new Date(timestamp > 1e12 ? timestamp : timestamp * 1000);
+    } else {
+      return '--';
+    }
+    
+    // Check if date is valid
+    if (isNaN(date.getTime())) {
+      return '--';
+    }
+    
+    return new Intl.DateTimeFormat('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }).format(date);
+  } catch (error) {
+    console.warn('Invalid timestamp:', timestamp, error);
+    return '--';
+  }
 }
 
 export function formatDuration(seconds) {

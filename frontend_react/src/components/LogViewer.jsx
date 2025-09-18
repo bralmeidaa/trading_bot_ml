@@ -424,11 +424,23 @@ const LogEntry = ({ log }) => {
   const [expanded, setExpanded] = useState(false);
 
   const formatTimestamp = (timestamp) => {
-    if (!timestamp) return 'N/A';
+    if (!timestamp || timestamp === 'N/A' || timestamp === 'Invalid') return 'N/A';
+    
     try {
-      return new Date(timestamp).toLocaleString();
+      // If it's already a formatted string, return as is
+      if (typeof timestamp === 'string' && timestamp.includes(':')) {
+        return timestamp;
+      }
+      
+      const date = new Date(timestamp);
+      if (isNaN(date.getTime())) {
+        return 'Invalid Date';
+      }
+      
+      return date.toLocaleString();
     } catch (e) {
-      return timestamp;
+      console.warn('Invalid timestamp in LogViewer:', timestamp, e);
+      return 'Invalid Date';
     }
   };
 
