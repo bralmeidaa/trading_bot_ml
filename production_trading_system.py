@@ -221,6 +221,15 @@ class ProductionTradingSystem:
                 # Log system status
                 self._log_system_status()
                 
+                # Clean up memory every 10 iterations (5 minutes)
+                if hasattr(self, '_iteration_count'):
+                    self._iteration_count += 1
+                else:
+                    self._iteration_count = 1
+                
+                if self._iteration_count % 10 == 0:
+                    self._cleanup_memory()
+                
                 # Wait before next iteration
                 await asyncio.sleep(30)  # Check every 30 seconds
                 
@@ -526,9 +535,9 @@ class ProductionTradingSystem:
             'total_pnl': self.total_pnl,
             'daily_pnl': self.daily_pnl,
             'active_trades': [asdict(trade) for trade in self.active_trades.values()],
-            'trade_history': [asdict(trade) for trade in self.trade_history[-100:]],  # Last 100 trades
+            'trade_history': [asdict(trade) for trade in self.trade_history[-200:]],  # Last 200 trades (increased from 100)
             'daily_stats': self.daily_stats[-30:],  # Last 30 days
-            'equity_curve': self.equity_curve[-100:]  # Last 100 points
+            'equity_curve': self.equity_curve[-500:]  # Last 500 points (increased from 100)
         }
         
         filename = f"system_state_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -536,6 +545,36 @@ class ProductionTradingSystem:
             json.dump(state, f, indent=2)
         
         logger.info(f"💾 System state saved to {filename}")
+    
+    def _cleanup_memory(self):
+        """Clean up memory by limiting historical data."""
+        # Limit trade history to prevent memory growth
+        if len(self.trade_history) > 200:
+            self.trade_history = self.trade_history[-200:]
+            logger.info(f"🧹 Cleaned trade history, keeping last 200 trades")
+        
+        # Limit equity curve to prevent memory growth
+        if len(self.equity_curve) > 500:
+            self.equity_curve = self.equity_curve[-500:]
+            logger.info(f"🧹 Cleaned equity curve, keeping last 500 points")
+        
+        # Limit daily stats to prevent memory growth
+        if len(self.daily_stats) > 30:
+            self.daily_stats = self.daily_stats[-30:]
+            logger.info(f"🧹 Cleaned daily stats, keeping last 30 days")
+        
+        # Clean up closed trades older than 24 hours
+        current_time = int(datetime.now().timestamp() * 1000)
+        old_trades = []
+        for trade_id, trade in list(self.active_trades.items()):
+            if trade.status == "closed" and current_time - trade.entry_time > 86400000:  # 24 hours
+                old_trades.append(trade_id)
+        
+        for trade_id in old_trades:
+            del self.active_trades[trade_id]
+        
+        if old_trades:
+            logger.info(f"🧹 Cleaned {len(old_trades)} old closed trades from active_trades")
 
 
 class OptimizedSignalGenerator:

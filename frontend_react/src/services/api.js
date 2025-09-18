@@ -141,6 +141,11 @@ class ApiService {
   async healthCheck() {
     return this.get('/health');
   }
+
+  // Performance Metrics
+  async getPerformanceMetrics() {
+    return this.get('/performance-metrics');
+  }
 }
 
 export const apiService = new ApiService();

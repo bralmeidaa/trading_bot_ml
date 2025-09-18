@@ -14,12 +14,20 @@ services:
         #  - trading-bot-data:/app/data
         #  - trading-bot-config:/app/config
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:12000/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+      interval: 60s
+      timeout: 15s
+      retries: 5
+      start_period: 60s
     networks:
       - trading-network
 
@@ -32,6 +40,14 @@ services:
     volumes:
       - redis_data:/data
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.25'
     networks:
       - trading-network
 
@@ -49,6 +65,14 @@ services:
     depends_on:
       - trading-bot
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.25'
     networks:
       - trading-network
 

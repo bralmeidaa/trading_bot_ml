@@ -40,9 +40,9 @@ def add_system_log(level: str, message: str, source: str = "system"):
         "source": source
     }
     system_logs.append(log_entry)
-    # Keep only last 100 logs to prevent memory issues
-    if len(system_logs) > 100:
-        system_logs = system_logs[-100:]
+    # Keep only last 50 logs to prevent memory issues (reduced from 100)
+    if len(system_logs) > 50:
+        system_logs = system_logs[-50:]
 
 def load_config_from_file() -> Tuple[GlobalConfig, List[BotConfig]]:
     """Load configuration from trading_config.json file."""
@@ -709,12 +709,137 @@ async def get_system_logs():
 
 @app.get("/api/health")
 async def health_check():
-    """Health check endpoint."""
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "version": "2.0.0"
-    }
+    """Enhanced health check endpoint with system metrics."""
+    import psutil
+    import os
+    
+    try:
+        # Get system metrics
+        memory_info = psutil.virtual_memory()
+        cpu_percent = psutil.cpu_percent(interval=1)
+        disk_usage = psutil.disk_usage('/')
+        
+        # Check if trading system is running
+        trading_system_running = system_task is not None and not system_task.done()
+        
+        # Calculate health score
+        health_score = 100
+        warnings = []
+        
+        # Memory check
+        if memory_info.percent > 85:
+            health_score -= 30
+            warnings.append(f"High memory usage: {memory_info.percent:.1f}%")
+        elif memory_info.percent > 70:
+            health_score -= 15
+            warnings.append(f"Moderate memory usage: {memory_info.percent:.1f}%")
+        
+        # CPU check
+        if cpu_percent > 90:
+            health_score -= 20
+            warnings.append(f"High CPU usage: {cpu_percent:.1f}%")
+        elif cpu_percent > 75:
+            health_score -= 10
+            warnings.append(f"Moderate CPU usage: {cpu_percent:.1f}%")
+        
+        # Disk check
+        if disk_usage.percent > 90:
+            health_score -= 25
+            warnings.append(f"High disk usage: {disk_usage.percent:.1f}%")
+        
+        # Trading system check
+        if not trading_system_running:
+            health_score -= 40
+            warnings.append("Trading system is not running")
+        
+        # Determine status
+        if health_score >= 80:
+            status = "healthy"
+        elif health_score >= 60:
+            status = "degraded"
+        else:
+            status = "unhealthy"
+        
+        return {
+            "status": status,
+            "health_score": health_score,
+            "timestamp": datetime.now().isoformat(),
+            "version": "2.0.0",
+            "system_metrics": {
+                "memory_percent": memory_info.percent,
+                "memory_available_mb": memory_info.available // (1024 * 1024),
+                "cpu_percent": cpu_percent,
+                "disk_percent": disk_usage.percent,
+                "trading_system_running": trading_system_running,
+                "active_logs": len(system_logs)
+            },
+            "warnings": warnings
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "health_score": 0,
+            "timestamp": datetime.now().isoformat(),
+            "version": "2.0.0",
+            "error": str(e)
+        }
+
+@app.get("/api/performance-metrics")
+async def get_performance_metrics():
+    """Get detailed performance metrics for monitoring."""
+    import psutil
+    import gc
+    
+    try:
+        # System metrics
+        memory_info = psutil.virtual_memory()
+        cpu_percent = psutil.cpu_percent(interval=0.1)
+        
+        # Python memory metrics
+        gc_stats = gc.get_stats()
+        
+        # Application metrics
+        logs_count = len(system_logs)
+        
+        # Trading system metrics (if available)
+        trading_metrics = {}
+        if system_task and not system_task.done():
+            trading_metrics = {
+                "system_running": True,
+                "task_status": "running"
+            }
+        else:
+            trading_metrics = {
+                "system_running": False,
+                "task_status": "stopped"
+            }
+        
+        return {
+            "success": True,
+            "data": {
+                "timestamp": datetime.now().isoformat(),
+                "system_metrics": {
+                    "memory_percent": memory_info.percent,
+                    "memory_used_mb": (memory_info.total - memory_info.available) // (1024 * 1024),
+                    "memory_available_mb": memory_info.available // (1024 * 1024),
+                    "cpu_percent": cpu_percent,
+                    "gc_collections": sum(stat['collections'] for stat in gc_stats),
+                    "gc_collected": sum(stat['collected'] for stat in gc_stats),
+                    "gc_uncollectable": sum(stat['uncollectable'] for stat in gc_stats)
+                },
+                "application_metrics": {
+                    "active_logs": logs_count,
+                    "max_logs": 50,
+                    "logs_utilization": (logs_count / 50) * 100
+                },
+                "trading_metrics": trading_metrics
+            }
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 @app.get("/api/signal-quality")
 async def get_signal_quality():
