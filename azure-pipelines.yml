@@ -1,18 +1,3 @@
-# Azure DevOps Pipeline for Trading Bot ML
-# Deploy to OCI VM with Docker
-
-trigger:
-  branches:
-    include:
-      - production-ready-system
-    exclude:
-      - advanced-ml-system
-      - main
-  paths:
-    exclude:
-    - README.md
-    - docs/*
-
 pool:
   name: 'trading-bot-ml-vm'
 
