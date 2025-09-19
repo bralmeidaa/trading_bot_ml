@@ -5,7 +5,7 @@ variables:
   # Azure DevOps Variables (set in pipeline variables)
   deploymentPath: '/opt/trading-bot-ml-v2'
   registryUrl: 'docker.io'
-  imageRepository: 'bralmeida/trading-bot-ml-v2'
+  imageRepository: 'bralmeida/trading-bot-v2'
   dockerImageTag: '$(Build.BuildId)'
   dockerImageLatestTag: 'latest'
   dockerImageCacheTag: 'cache'
