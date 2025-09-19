@@ -1,9 +1,9 @@
 services:
-  trading-bot:
-    image: bralmeida/trading-bot-ml:latest
-    container_name: trading-bot-master
+  trading-bot-v2:
+    image: bralmeida/trading-bot-v2:latest
+    container_name: trading-bot-master-v2
     ports:
-      - "12000:12000"
+      - "12001:12000"
     environment:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
@@ -21,40 +21,24 @@ services:
       retries: 3
       start_period: 40s
     networks:
-      - trading-network
+      - trading-network-v2
 
-  # Optional: Redis for caching and session management
-  redis:
-    image: redis:7-alpine
-    container_name: trading-bot-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    restart: unless-stopped
-    networks:
-      - trading-network
-
-  # Optional: Nginx reverse proxy
+# Optional: Nginx reverse proxy
   nginx:
     image: nginx:alpine
-    container_name: trading-bot-nginx
+    container_name: trading-bot-nginx-v2
     ports:
-      - "80:80"
-      - "443:443"
+      - "8443:8443"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./fullchainCert.pem:/etc/nginx/ssl/fullchainCert.pem:ro
       - ./privateKey.pem:/etc/nginx/ssl/privateKey.pem:ro
     depends_on:
-      - trading-bot
+      - trading-bot-v2
     restart: unless-stopped
     networks:
-      - trading-network
-
-volumes:
-  redis_data:
+      - trading-network-v2
 
 networks:
-  trading-network:
-    driver: bridge
+  trading-network-v2:
+    driver: bridge    
