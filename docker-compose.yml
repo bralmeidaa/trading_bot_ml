@@ -1,6 +1,6 @@
 services:
   trading-bot-v2:
-    image: bralmeida/trading-bot-v2:latest
+    image: bralmeida/trading-bot-ml-v2:latest
     container_name: trading-bot-master-v2
     ports:
       - "12001:12000"
