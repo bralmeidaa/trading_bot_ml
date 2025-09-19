@@ -92,8 +92,6 @@ stages:
           --platform linux/arm64 \
           --tag '$(imageRepository):$(dockerImageLatestTag)' \
           --file $(dockerfilePath) \
-          --no-cache \
-          --pull \
           --push .
           
           echo "✅ Docker image built and pushed successfully!"
