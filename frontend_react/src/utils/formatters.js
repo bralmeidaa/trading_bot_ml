@@ -29,17 +29,39 @@ export function formatNumber(value, decimals = 2) {
 }
 
 export function formatDateTime(timestamp) {
-  if (!timestamp) return '--';
+  if (!timestamp || timestamp === null || timestamp === undefined) {
+    return 'N/A';
+  }
   
-  const date = new Date(timestamp);
-  return new Intl.DateTimeFormat('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }).format(date);
+  try {
+    let date;
+    if (typeof timestamp === 'string') {
+      date = new Date(timestamp);
+    } else if (typeof timestamp === 'number') {
+      // Handle both seconds and milliseconds
+      date = timestamp > 1e12 ? new Date(timestamp) : new Date(timestamp * 1000);
+    } else {
+      console.warn('Invalid timestamp type:', typeof timestamp, timestamp);
+      return 'Invalid Date';
+    }
+    
+    if (isNaN(date.getTime())) {
+      console.warn('Invalid timestamp value:', timestamp);
+      return 'Invalid Date';
+    }
+    
+    return new Intl.DateTimeFormat('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }).format(date);
+  } catch (error) {
+    console.warn('Error formatting timestamp:', timestamp, error);
+    return 'Invalid Date';
+  }
 }
 
 export function formatDuration(seconds) {

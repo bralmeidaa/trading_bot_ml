@@ -353,9 +353,30 @@ async def get_bot_status():
     
     return {"success": True, "data": {"bots": bots}}
 
+def safe_format_timestamp(timestamp):
+    """Safely format timestamp handling various edge cases."""
+    if not timestamp or timestamp is None:
+        return "N/A"
+    try:
+        # Handle both seconds and milliseconds
+        if isinstance(timestamp, (int, float)):
+            # Check for invalid float values
+            if not isinstance(timestamp, int) and (timestamp != timestamp or timestamp == float('inf') or timestamp == float('-inf')):
+                return "Invalid"
+            if timestamp > 1e12:  # milliseconds
+                return datetime.fromtimestamp(timestamp / 1000).strftime("%H:%M")
+            else:  # seconds
+                return datetime.fromtimestamp(timestamp).strftime("%H:%M")
+        else:
+            return "Invalid"
+    except (ValueError, OSError, TypeError, OverflowError) as e:
+        if ENHANCED_FEATURES:
+            enhanced_logger.log_structured(LogLevel.WARNING, LogCategory.API, f"Invalid timestamp: {timestamp}, error: {e}")
+        return "Invalid"
+
 @app.get("/api/trades/recent")
 async def get_recent_trades():
-    """Get recent trades."""
+    """Get recent trades with safe timestamp handling."""
     global trading_system
     
     if trading_system:
@@ -363,14 +384,18 @@ async def get_recent_trades():
         trades = []
         
         for trade in recent_trades:
+            # Safe timestamp processing
+            safe_time = safe_format_timestamp(trade.entry_time)
+            
             trades.append({
                 "symbol": trade.symbol,
                 "direction": "LONG" if trade.direction == 1 else "SHORT",
                 "pnl": trade.pnl or 0.0,
                 "status": trade.status,
-                "time": datetime.fromtimestamp(trade.entry_time / 1000).strftime("%H:%M"),
+                "time": safe_time,
                 "entry_price": trade.entry_price,
-                "exit_price": trade.exit_price
+                "exit_price": trade.exit_price,
+                "entry_time": trade.entry_time  # Keep original for frontend processing
             })
         
         return {"success": True, "data": {"trades": trades}}
@@ -378,16 +403,41 @@ async def get_recent_trades():
     # Return empty data when system is not running
     return {"success": True, "data": {"trades": []}}
 
+def safe_validate_equity_point(point):
+    """Safely validate and sanitize equity curve points."""
+    try:
+        timestamp = point.get('timestamp')
+        equity = point.get('equity')
+        
+        # Validate timestamp
+        if not timestamp or not isinstance(timestamp, (int, float)):
+            return None
+            
+        # Validate equity
+        if equity is None or not isinstance(equity, (int, float)):
+            return None
+            
+        return {
+            "timestamp": int(timestamp),
+            "equity": float(equity)
+        }
+    except (TypeError, ValueError, KeyError) as e:
+        enhanced_logger.log_structured(LogLevel.WARNING, LogCategory.API, f"Invalid equity point: {point}, error: {e}")
+        return None
+
 @app.get("/api/equity")
 async def get_equity_curve():
-    """Get equity curve data."""
+    """Get equity curve data with safe timestamp validation."""
     global trading_system
     
     if trading_system and trading_system.equity_curve:
-        equity_points = [
-            {"timestamp": point['timestamp'], "equity": point['equity']}
-            for point in trading_system.equity_curve[-100:]  # Last 100 points
-        ]
+        # Safely process equity points
+        equity_points = []
+        for point in trading_system.equity_curve[-100:]:  # Last 100 points
+            safe_point = safe_validate_equity_point(point)
+            if safe_point:
+                equity_points.append(safe_point)
+        
         return {"success": True, "data": {"equity_curve": equity_points}}
     
     # Return empty data when system is not running

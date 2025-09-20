@@ -424,11 +424,29 @@ const LogEntry = ({ log }) => {
   const [expanded, setExpanded] = useState(false);
 
   const formatTimestamp = (timestamp) => {
-    if (!timestamp) return 'N/A';
+    if (!timestamp || timestamp === null || timestamp === undefined) {
+      return 'N/A';
+    }
     try {
-      return new Date(timestamp).toLocaleString();
+      let date;
+      if (typeof timestamp === 'string') {
+        date = new Date(timestamp);
+      } else if (typeof timestamp === 'number') {
+        // Handle both seconds and milliseconds
+        date = timestamp > 1e12 ? new Date(timestamp) : new Date(timestamp * 1000);
+      } else {
+        return 'Invalid Date';
+      }
+      
+      if (isNaN(date.getTime())) {
+        console.warn('Invalid timestamp in log:', timestamp);
+        return 'Invalid Date';
+      }
+      
+      return date.toLocaleString();
     } catch (e) {
-      return timestamp;
+      console.warn('Error formatting log timestamp:', timestamp, e);
+      return 'Invalid Date';
     }
   };
 

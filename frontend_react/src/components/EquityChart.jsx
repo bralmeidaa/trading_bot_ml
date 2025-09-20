@@ -37,12 +37,27 @@ export default function EquityChart() {
       };
     }
 
-    const labels = equityData.map(point => 
-      new Date(point.timestamp).toLocaleTimeString('en-US', {
-        hour: '2-digit',
-        minute: '2-digit',
-      })
-    );
+    // Safe timestamp processing for labels
+    const labels = equityData.map(point => {
+      if (!point.timestamp) return 'N/A';
+      try {
+        const timestamp = typeof point.timestamp === 'number' 
+          ? (point.timestamp > 1e12 ? point.timestamp : point.timestamp * 1000)
+          : point.timestamp;
+        const date = new Date(timestamp);
+        if (isNaN(date.getTime())) {
+          console.warn('Invalid timestamp in equity data:', point.timestamp);
+          return 'N/A';
+        }
+        return date.toLocaleTimeString('en-US', {
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+      } catch (e) {
+        console.warn('Error processing timestamp:', point.timestamp, e);
+        return 'N/A';
+      }
+    });
 
     const equityValues = equityData.map(point => point.equity);
     const minEquity = Math.min(...equityValues);
@@ -97,9 +112,11 @@ export default function EquityChart() {
           title: function(context) {
             if (context.length > 0 && equityData) {
               const dataPoint = equityData[context[0].dataIndex];
-              return formatDateTime(dataPoint.timestamp);
+              if (dataPoint && dataPoint.timestamp) {
+                return formatDateTime(dataPoint.timestamp);
+              }
             }
-            return '';
+            return 'N/A';
           },
         },
       },

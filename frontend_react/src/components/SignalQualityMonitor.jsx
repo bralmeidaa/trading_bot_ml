@@ -167,7 +167,17 @@ const SignalQualityMonitor = () => {
                     </span>
                   </div>
                   <div className="text-xs text-gray-500">
-                    {new Date(rejection.timestamp).toLocaleTimeString()}
+                    {(() => {
+                      try {
+                        if (!rejection.timestamp) return 'N/A';
+                        const date = new Date(rejection.timestamp);
+                        if (isNaN(date.getTime())) return 'Invalid Time';
+                        return date.toLocaleTimeString();
+                      } catch (e) {
+                        console.warn('Error formatting rejection timestamp:', rejection.timestamp, e);
+                        return 'Invalid Time';
+                      }
+                    })()}
                   </div>
                 </div>
               ))}

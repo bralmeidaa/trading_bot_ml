@@ -660,7 +660,17 @@ const BackupsTab = ({ backups, onRestore, onRefresh, saving }) => {
               <div>
                 <h4 className="font-medium text-gray-900">{backup.filename}</h4>
                 <p className="text-sm text-gray-500">
-                  Created: {new Date(backup.created).toLocaleString()} • 
+                  Created: {(() => {
+                    try {
+                      if (!backup.created) return 'N/A';
+                      const date = new Date(backup.created);
+                      if (isNaN(date.getTime())) return 'Invalid Date';
+                      return date.toLocaleString();
+                    } catch (e) {
+                      console.warn('Error formatting backup timestamp:', backup.created, e);
+                      return 'Invalid Date';
+                    }
+                  })()} • 
                   Size: {(backup.size / 1024).toFixed(1)} KB
                 </p>
               </div>
