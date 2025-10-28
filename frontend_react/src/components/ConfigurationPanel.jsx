@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Settings, Save, RotateCcw, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react';
+import { Settings, Save, RotateCcw, ChevronDown, ChevronUp, AlertCircle, Database } from 'lucide-react';
 import { useConfig } from '../hooks/useApi';
 import { apiService } from '../services/api';
 import { notificationService } from '../utils/notifications';
 import BotManagement from './BotManagement';
+import ClearHistoryButton, { AdminClearHistoryPanel } from './ClearHistoryButton';
+import TradingRestrictions from './TradingRestrictions';
+import { useDatabaseHealth } from '../services/apiClient';
 
 const FormField = ({ label, name, type = 'text', value, onChange, placeholder, min, max, step, required = false, disabled = false }) => (
   <div className="mb-4">
@@ -426,6 +429,12 @@ export default function ConfigurationPanel() {
             )}
           </div>
 
+          {/* Database Administration Panel */}
+          <DatabaseAdminPanel />
+
+          {/* Trading Restrictions Panel */}
+          <TradingRestrictionsPanel />
+
           {/* Configuration Tips */}
           <div className="bg-primary-50 border border-primary-200 rounded-lg p-4">
             <h4 className="font-medium text-primary-900 mb-2">💡 Configuration Tips</h4>
@@ -445,3 +454,78 @@ export default function ConfigurationPanel() {
     </div>
   );
 }
+
+// Database Administration Panel Component
+const DatabaseAdminPanel = () => {
+  const { data: dbHealth, isLoading, error } = useDatabaseHealth();
+
+  return (
+    <div className="mb-6">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/20 rounded-lg flex items-center justify-center">
+            <Database className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+          </div>
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+              Database Administration
+            </h3>
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              Manage trading data and system maintenance
+            </p>
+          </div>
+        </div>
+
+        {/* Database Health Status */}
+        <div className="mb-6 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+          <h4 className="font-medium text-gray-900 dark:text-white mb-3">Database Status</h4>
+          {isLoading ? (
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+              <span className="text-sm text-gray-600 dark:text-gray-400">Checking connection...</span>
+            </div>
+          ) : error ? (
+            <div className="flex items-center gap-2 text-red-600 dark:text-red-400">
+              <AlertCircle className="w-4 h-4" />
+              <span className="text-sm">Connection failed</span>
+            </div>
+          ) : dbHealth ? (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="flex items-center gap-2">
+                <div className={`w-3 h-3 rounded-full ${dbHealth.connected ? 'bg-green-500' : 'bg-red-500'}`} />
+                <span className="text-sm text-gray-700 dark:text-gray-300">
+                  {dbHealth.connected ? 'Connected' : 'Disconnected'}
+                </span>
+              </div>
+              {dbHealth.tables && (
+                <>
+                  <div className="text-sm text-gray-700 dark:text-gray-300">
+                    Trades: {dbHealth.tables.trades || 0}
+                  </div>
+                  <div className="text-sm text-gray-700 dark:text-gray-300">
+                    Logs: {dbHealth.tables.system_logs || 0}
+                  </div>
+                </>
+              )}
+            </div>
+          ) : null}
+        </div>
+
+        {/* Clear History Section */}
+        <AdminClearHistoryPanel />
+      </div>
+    </div>
+  );
+};
+
+// Trading Restrictions Panel Component
+const TradingRestrictionsPanel = () => {
+  return (
+    <div className="mb-6">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+        <TradingRestrictions />
+      </div>
+    </div>
+  );
+};
+

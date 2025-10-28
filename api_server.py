@@ -6,6 +6,7 @@ Provides REST API endpoints for the dashboard frontend.
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional, Tuple
 import json
@@ -22,12 +23,48 @@ from production_trading_system import ProductionTradingSystem, GlobalConfig, Bot
 from config_manager import config_manager
 from enhanced_logging import enhanced_logger, LogLevel, LogCategory
 
-app = FastAPI(title="Trading Bot ML API", version="1.0.0")
+# Import database components
+from database_connection import initialize_database, create_database_tables, db_manager
+from api_endpoints_db import db_router
+
+app = FastAPI(title="Trading Bot ML API", version="2.0.0")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Em produção, especificar domínios
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include database router
+app.include_router(db_router)
 
 # Global trading system instance
 trading_system: Optional[ProductionTradingSystem] = None
 system_logs = []  # Store system logs in memory
 system_task: Optional[asyncio.Task] = None
+
+@app.on_event("startup")
+async def startup_event():
+    """Inicialização do servidor."""
+    try:
+        # Inicializar conexão com banco de dados
+        db_connection_string = os.getenv('DATABASE_URL')
+        if initialize_database(db_connection_string):
+            add_system_log("SUCCESS", "Conexão com MySQL HeatWave estabelecida", "database")
+            
+            # Criar tabelas se necessário
+            if create_database_tables():
+                add_system_log("SUCCESS", "Tabelas do banco verificadas/criadas", "database")
+            else:
+                add_system_log("WARNING", "Falha ao criar/verificar tabelas", "database")
+        else:
+            add_system_log("ERROR", "Falha na conexão com MySQL HeatWave", "database")
+            
+    except Exception as e:
+        add_system_log("ERROR", f"Erro na inicialização: {e}", "startup")
 
 def add_system_log(level: str, message: str, source: str = "system"):
     """Add a log entry to the system logs."""

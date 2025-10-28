@@ -61,6 +61,16 @@ USER tradingbot
 
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
+
+# Database environment variables (can be overridden)
+ENV DB_HOST=localhost
+ENV DB_PORT=3306
+ENV DB_USER=trading_bot
+ENV DB_PASSWORD=
+ENV DB_NAME=trading_bot_ml
+ENV DB_SSL=false
+ENV DATABASE_URL=
+
 EXPOSE 12000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:12000/api/health || exit 1

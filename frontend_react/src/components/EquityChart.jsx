@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -11,9 +11,10 @@ import {
   Filler,
 } from 'chart.js';
 import { Line } from 'react-chartjs-2';
-import { TrendingUp, AlertCircle } from 'lucide-react';
-import { useEquity } from '../hooks/useApi';
-import { formatCurrency, formatDateTime } from '../utils/formatters';
+import { TrendingUp, Calendar, RefreshCw } from 'lucide-react';
+import { useEquityCurve } from '../services/apiClient';
+import { formatTableDate, getDateRangeForPeriod, TIME_PERIODS } from '../utils/dateUtils';
+import { ChartSkeleton, ErrorState, EmptyState } from './LoadingSkeletons';
 
 ChartJS.register(
   CategoryScale,
@@ -27,249 +28,289 @@ ChartJS.register(
 );
 
 export default function EquityChart() {
-  const { data: equityData, loading, error } = useEquity();
+  const [selectedPeriod, setSelectedPeriod] = useState('7D');
+  const [selectedBot, setSelectedBot] = useState(null); // null = all bots
+  
+  // Calculate date range based on selected period
+  const dateRange = useMemo(() => {
+    const { startDate, endDate } = getDateRangeForPeriod(selectedPeriod);
+    const days = Math.ceil((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24));
+    return { days, startDate, endDate };
+  }, [selectedPeriod]);
 
+  // Fetch equity curve data
+  const { 
+    data: equityData, 
+    isLoading, 
+    error, 
+    refetch 
+  } = useEquityCurve({
+    days: dateRange.days,
+    bot_id: selectedBot
+  });
+
+  // Process chart data
   const chartData = useMemo(() => {
-    if (!equityData || !Array.isArray(equityData)) {
+    if (!equityData || !Array.isArray(equityData) || equityData.length === 0) {
       return {
         labels: [],
         datasets: [],
       };
     }
 
-    // Safe timestamp processing for labels
-    const labels = equityData.map(point => {
-      if (!point.timestamp) return 'N/A';
-      try {
-        const timestamp = typeof point.timestamp === 'number' 
-          ? (point.timestamp > 1e12 ? point.timestamp : point.timestamp * 1000)
-          : point.timestamp;
-        const date = new Date(timestamp);
-        if (isNaN(date.getTime())) {
-          console.warn('Invalid timestamp in equity data:', point.timestamp);
-          return 'N/A';
-        }
-        return date.toLocaleTimeString('en-US', {
-          hour: '2-digit',
-          minute: '2-digit',
-        });
-      } catch (e) {
-        console.warn('Error processing timestamp:', point.timestamp, e);
-        return 'N/A';
-      }
-    });
+    // Sort data by timestamp
+    const sortedData = [...equityData].sort((a, b) => 
+      new Date(a.timestamp) - new Date(b.timestamp)
+    );
 
-    const equityValues = equityData.map(point => point.equity);
-    const minEquity = Math.min(...equityValues);
-    const maxEquity = Math.max(...equityValues);
-    const isPositive = equityValues[equityValues.length - 1] >= equityValues[0];
+    // Process labels with safe date formatting
+    const labels = sortedData.map(point => 
+      formatTableDate(point.timestamp)
+    );
+
+    // Calculate equity values
+    const equityValues = sortedData.map(point => parseFloat(point.equity || 0));
+    const drawdownValues = sortedData.map(point => parseFloat(point.drawdown_pct || 0));
+
+    // Calculate some basic stats
+    const initialEquity = equityValues[0] || 0;
+    const currentEquity = equityValues[equityValues.length - 1] || 0;
+    const totalReturn = initialEquity > 0 ? ((currentEquity - initialEquity) / initialEquity) * 100 : 0;
+    const maxDrawdown = Math.max(...drawdownValues);
 
     return {
       labels,
       datasets: [
         {
-          label: 'Account Equity',
+          label: 'Equity',
           data: equityValues,
-          borderColor: isPositive ? 'rgb(34, 197, 94)' : 'rgb(239, 68, 68)',
-          backgroundColor: isPositive 
-            ? 'rgba(34, 197, 94, 0.1)' 
-            : 'rgba(239, 68, 68, 0.1)',
+          borderColor: totalReturn >= 0 ? '#10B981' : '#EF4444',
+          backgroundColor: totalReturn >= 0 ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
           borderWidth: 2,
           fill: true,
-          tension: 0.4,
-          pointRadius: 0,
-          pointHoverRadius: 6,
-          pointHoverBackgroundColor: isPositive ? 'rgb(34, 197, 94)' : 'rgb(239, 68, 68)',
-          pointHoverBorderColor: 'white',
-          pointHoverBorderWidth: 2,
+          tension: 0.1,
+          pointRadius: equityValues.length > 50 ? 0 : 3,
+          pointHoverRadius: 5,
         },
+        {
+          label: 'Drawdown %',
+          data: drawdownValues.map(val => -Math.abs(val)), // Make drawdown negative for display
+          borderColor: '#F59E0B',
+          backgroundColor: 'rgba(245, 158, 11, 0.1)',
+          borderWidth: 1,
+          fill: true,
+          tension: 0.1,
+          pointRadius: 0,
+          pointHoverRadius: 3,
+          yAxisID: 'y1',
+        }
       ],
+      stats: {
+        initialEquity,
+        currentEquity,
+        totalReturn,
+        maxDrawdown,
+        dataPoints: equityValues.length
+      }
     };
   }, [equityData]);
 
+  // Chart options
   const chartOptions = {
     responsive: true,
     maintainAspectRatio: false,
+    interaction: {
+      mode: 'index',
+      intersect: false,
+    },
     plugins: {
       legend: {
-        display: false,
-      },
-      title: {
-        display: false,
-      },
-      tooltip: {
-        mode: 'index',
-        intersect: false,
-        backgroundColor: 'rgba(0, 0, 0, 0.8)',
-        titleColor: 'white',
-        bodyColor: 'white',
-        borderColor: 'rgba(255, 255, 255, 0.1)',
-        borderWidth: 1,
-        callbacks: {
-          label: function(context) {
-            return `Equity: ${formatCurrency(context.parsed.y)}`;
-          },
-          title: function(context) {
-            if (context.length > 0 && equityData) {
-              const dataPoint = equityData[context[0].dataIndex];
-              if (dataPoint && dataPoint.timestamp) {
-                return formatDateTime(dataPoint.timestamp);
-              }
-            }
-            return 'N/A';
-          },
+        position: 'top',
+        labels: {
+          usePointStyle: true,
+          padding: 20,
         },
       },
+      tooltip: {
+        callbacks: {
+          label: function(context) {
+            const label = context.dataset.label || '';
+            const value = context.parsed.y;
+            
+            if (label === 'Equity') {
+              return `${label}: $${value.toFixed(2)}`;
+            } else if (label === 'Drawdown %') {
+              return `${label}: ${Math.abs(value).toFixed(2)}%`;
+            }
+            return `${label}: ${value}`;
+          },
+          title: function(context) {
+            return `Time: ${context[0].label}`;
+          }
+        }
+      }
     },
     scales: {
       x: {
         display: true,
-        grid: {
-          display: false,
+        title: {
+          display: true,
+          text: 'Time'
         },
         ticks: {
-          maxTicksLimit: 8,
-          color: 'rgb(107, 114, 128)',
-        },
+          maxTicksLimit: 10,
+        }
       },
       y: {
+        type: 'linear',
         display: true,
-        grid: {
-          color: 'rgba(107, 114, 128, 0.1)',
+        position: 'left',
+        title: {
+          display: true,
+          text: 'Equity ($)'
         },
         ticks: {
-          color: 'rgb(107, 114, 128)',
           callback: function(value) {
-            return formatCurrency(value);
-          },
-        },
+            return '$' + value.toFixed(0);
+          }
+        }
       },
-    },
-    interaction: {
-      mode: 'nearest',
-      axis: 'x',
-      intersect: false,
-    },
-    elements: {
-      point: {
-        hoverRadius: 8,
+      y1: {
+        type: 'linear',
+        display: true,
+        position: 'right',
+        title: {
+          display: true,
+          text: 'Drawdown (%)'
+        },
+        grid: {
+          drawOnChartArea: false,
+        },
+        ticks: {
+          callback: function(value) {
+            return Math.abs(value).toFixed(1) + '%';
+          }
+        }
       },
     },
   };
 
+  // Loading state
+  if (isLoading) {
+    return <ChartSkeleton height="400px" />;
+  }
+
+  // Error state
   if (error) {
     return (
-      <div className="card mb-8">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-semibold text-gray-900">Equity Curve</h2>
-        </div>
-        <div className="h-80 flex items-center justify-center">
-          <div className="text-center text-danger-600">
-            <AlertCircle className="h-12 w-12 mx-auto mb-2" />
-            <p>Failed to load equity data: {error}</p>
-          </div>
-        </div>
-      </div>
+      <ErrorState 
+        message={`Failed to load equity curve: ${error.message}`}
+        onRetry={refetch}
+        className="h-96"
+      />
     );
   }
 
-  if (loading) {
+  // Empty state
+  if (!equityData || equityData.length === 0) {
     return (
-      <div className="card mb-8">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-semibold text-gray-900">Equity Curve</h2>
-        </div>
-        <div className="h-80 flex items-center justify-center">
-          <div className="animate-pulse text-center">
-            <div className="h-4 bg-gray-200 rounded w-32 mx-auto mb-4"></div>
-            <div className="h-64 bg-gray-200 rounded"></div>
-          </div>
-        </div>
-      </div>
+      <EmptyState
+        title="No Equity Data"
+        description="No equity curve data available for the selected period."
+        icon={<TrendingUp className="w-8 h-8 text-gray-400" />}
+        className="h-96"
+      />
     );
   }
-
-  const currentEquity = equityData && equityData.length > 0 
-    ? equityData[equityData.length - 1].equity 
-    : 0;
-  const initialEquity = equityData && equityData.length > 0 
-    ? equityData[0].equity 
-    : 0;
-  const totalReturn = initialEquity !== 0 
-    ? ((currentEquity - initialEquity) / initialEquity) * 100 
-    : 0;
 
   return (
-    <div className="card mb-8">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-xl font-semibold text-gray-900">Equity Curve</h2>
-          <p className="text-sm text-gray-600 mt-1">
-            Account balance over time
-          </p>
-        </div>
-        <div className="text-right">
-          <div className="flex items-center space-x-2">
-            <TrendingUp className={`h-5 w-5 ${
-              totalReturn >= 0 ? 'text-success-600' : 'text-danger-600'
-            }`} />
-            <div>
-              <p className="text-sm text-gray-600">Current Equity</p>
-              <p className="text-lg font-semibold">
-                {formatCurrency(currentEquity)}
-              </p>
-            </div>
+    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-6">
+        <div className="flex items-center gap-3 mb-4 sm:mb-0">
+          <div className="w-10 h-10 bg-green-100 dark:bg-green-900/20 rounded-lg flex items-center justify-center">
+            <TrendingUp className="w-5 h-5 text-green-600 dark:text-green-400" />
           </div>
-          <div className="mt-2">
-            <p className="text-sm text-gray-600">Total Return</p>
-            <p className={`text-lg font-semibold ${
-              totalReturn >= 0 ? 'text-success-600' : 'text-danger-600'
-            }`}>
-              {totalReturn >= 0 ? '+' : ''}{totalReturn.toFixed(2)}%
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+              Equity Curve
+            </h3>
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              Portfolio performance over time
             </p>
           </div>
         </div>
+
+        {/* Controls */}
+        <div className="flex flex-col sm:flex-row gap-3">
+          {/* Time Period Selector */}
+          <div className="flex items-center gap-2">
+            <Calendar className="w-4 h-4 text-gray-500" />
+            <select
+              value={selectedPeriod}
+              onChange={(e) => setSelectedPeriod(e.target.value)}
+              className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            >
+              {TIME_PERIODS.map(period => (
+                <option key={period.value} value={period.value}>
+                  {period.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Refresh Button */}
+          <button
+            onClick={() => refetch()}
+            disabled={isLoading}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+        </div>
       </div>
 
-      <div className="h-80">
-        {equityData && equityData.length > 0 ? (
-          <Line data={chartData} options={chartOptions} />
-        ) : (
-          <div className="h-full flex items-center justify-center text-gray-500">
-            <div className="text-center">
-              <TrendingUp className="h-12 w-12 mx-auto mb-2 opacity-50" />
-              <p>Waiting for equity data...</p>
-              <p className="text-sm">Your equity curve will appear here once trading begins</p>
+      {/* Stats Summary */}
+      {chartData.stats && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+          <div className="text-center">
+            <div className="text-sm text-gray-600 dark:text-gray-400">Initial</div>
+            <div className="text-lg font-semibold text-gray-900 dark:text-white">
+              ${chartData.stats.initialEquity.toFixed(2)}
             </div>
           </div>
-        )}
-      </div>
-
-      {/* Chart Statistics */}
-      {equityData && equityData.length > 0 && (
-        <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4 pt-4 border-t border-gray-200">
           <div className="text-center">
-            <p className="text-sm text-gray-600">Starting Equity</p>
-            <p className="font-semibold">{formatCurrency(initialEquity)}</p>
+            <div className="text-sm text-gray-600 dark:text-gray-400">Current</div>
+            <div className="text-lg font-semibold text-gray-900 dark:text-white">
+              ${chartData.stats.currentEquity.toFixed(2)}
+            </div>
           </div>
           <div className="text-center">
-            <p className="text-sm text-gray-600">Current Equity</p>
-            <p className="font-semibold">{formatCurrency(currentEquity)}</p>
+            <div className="text-sm text-gray-600 dark:text-gray-400">Total Return</div>
+            <div className={`text-lg font-semibold ${chartData.stats.totalReturn >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+              {chartData.stats.totalReturn >= 0 ? '+' : ''}{chartData.stats.totalReturn.toFixed(2)}%
+            </div>
           </div>
           <div className="text-center">
-            <p className="text-sm text-gray-600">Total P&L</p>
-            <p className={`font-semibold ${
-              (currentEquity - initialEquity) >= 0 ? 'text-success-600' : 'text-danger-600'
-            }`}>
-              {formatCurrency(currentEquity - initialEquity)}
-            </p>
-          </div>
-          <div className="text-center">
-            <p className="text-sm text-gray-600">Data Points</p>
-            <p className="font-semibold">{equityData.length}</p>
+            <div className="text-sm text-gray-600 dark:text-gray-400">Max Drawdown</div>
+            <div className="text-lg font-semibold text-red-600 dark:text-red-400">
+              -{chartData.stats.maxDrawdown.toFixed(2)}%
+            </div>
           </div>
         </div>
       )}
+
+      {/* Chart */}
+      <div className="h-80">
+        <Line data={chartData} options={chartOptions} />
+      </div>
+
+      {/* Data Info */}
+      <div className="mt-4 text-xs text-gray-500 dark:text-gray-400 text-center">
+        Showing {chartData.stats?.dataPoints || 0} data points for {selectedPeriod.toLowerCase()}
+        {selectedBot && ` • Bot: ${selectedBot}`}
+      </div>
     </div>
   );
 }
