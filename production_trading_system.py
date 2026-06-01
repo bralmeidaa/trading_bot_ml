@@ -13,23 +13,25 @@ from typing import Dict, List, Tuple, Any, Optional
 import time
 from dataclasses import dataclass, asdict
 from enum import Enum
-
-# Import enhanced logging and configuration management
-try:
-    from enhanced_logging import enhanced_logger, LogLevel, LogCategory
-    from config_manager import config_manager
-    ENHANCED_FEATURES = True
-except ImportError:
-    ENHANCED_FEATURES = False
-    print("Enhanced features not available - running in basic mode")
 import ccxt
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, TimeSeriesSplit
+from sklearn.metrics import accuracy_score
 import xgboost as xgb
 import lightgbm as lgb
 import logging
 warnings.filterwarnings('ignore')
+
+# Persistence layer — optional; system runs without it (in-memory only)
+try:
+    from backend.persistence.database import init_db
+    from backend.persistence.repository import (
+        TradeRepository, EquityRepository, DailyStatsRepository
+    )
+    _DB_AVAILABLE = True
+except ImportError:
+    _DB_AVAILABLE = False
 
 # Configure logging
 logging.basicConfig(
@@ -98,6 +100,7 @@ class Trade:
     pnl_pct: Optional[float] = None
     status: str = "open"  # open, closed, cancelled
     reason: Optional[str] = None
+    bot_id: str = ""
 
 
 class ProductionTradingSystem:
@@ -107,23 +110,12 @@ class ProductionTradingSystem:
         self.global_config = global_config
         self.bot_configs = {f"{config.symbol}_{config.timeframe}": config for config in bot_configs}
         
-        # Initialize exchange with fallback to mock
-        self.using_mock = False
-        try:
-            self.exchange = ccxt.binance({
-                'sandbox': global_config.paper_trading,
-                'rateLimit': 1200,
-                'enableRateLimit': True,
-            })
-            # Test connection
-            self.exchange.load_markets()
-            logger.info("✅ Connected to Binance exchange")
-        except Exception as e:
-            logger.warning(f"⚠️ Cannot connect to Binance: {e}")
-            logger.info("🔄 Using mock exchange for development/testing")
-            from mock_exchange import MockExchange
-            self.exchange = MockExchange()
-            self.using_mock = True
+        # Initialize exchange
+        self.exchange = ccxt.binance({
+            'sandbox': global_config.paper_trading,
+            'rateLimit': 1200,
+            'enableRateLimit': True,
+        })
         
         # System state
         self.active_trades: Dict[str, Trade] = {}
@@ -138,63 +130,51 @@ class ProductionTradingSystem:
         self.trade_history = []
         self.daily_stats = []
         
+        # Peak equity for drawdown tracking (used by risk manager)
+        self._peak_equity = global_config.total_capital
+
         # Signal generators for each bot
         self.signal_generators = {}
         for bot_id, config in self.bot_configs.items():
             self.signal_generators[bot_id] = OptimizedSignalGenerator(config.symbol, config.timeframe)
-        
+
+        # Risk managers (Kelly Criterion + volatility sizing) — loaded from backend if available
+        self.risk_managers: Dict[str, Any] = {}
+        try:
+            from backend.core.risk import AdvancedRiskManager, RiskParams
+            for bot_id in self.bot_configs:
+                self.risk_managers[bot_id] = AdvancedRiskManager(RiskParams())
+            logger.info("AdvancedRiskManager loaded (Kelly Criterion active)")
+        except ImportError:
+            logger.info("backend.core.risk not found — using default position sizing")
+
+        # Persistence repositories
+        self._trade_repo: Optional[Any] = None
+        self._equity_repo: Optional[Any] = None
+        self._daily_repo: Optional[Any] = None
+        self._equity_snapshot_counter = 0   # write equity to DB every 20 calls (~10 min)
+        self._daily_wins = 0
+        self._daily_losses = 0
+        if _DB_AVAILABLE:
+            try:
+                init_db()
+                self._trade_repo  = TradeRepository()
+                self._equity_repo = EquityRepository()
+                self._daily_repo  = DailyStatsRepository()
+                self._load_history_from_db()
+                logger.info("Database persistence enabled")
+            except Exception as exc:
+                logger.warning(f"DB init failed ({exc}) — running in-memory only")
+
         logger.info(f"Production Trading System initialized with {len(bot_configs)} bots")
         logger.info(f"Paper Trading: {global_config.paper_trading}")
         logger.info(f"Total Capital: ${global_config.total_capital:,.2f}")
     
-    async def _initialize_bots(self):
-        """Initialize bots with sufficient historical data."""
-        logger.info("📊 Initializing bots with historical data...")
-        
-        for bot_id, config in self.bot_configs.items():
-            if not config.enabled:
-                continue
-                
-            try:
-                # Fetch extended historical data for initialization
-                ohlcv = self.exchange.fetch_ohlcv(config.symbol, config.timeframe, limit=500)
-                if not ohlcv or len(ohlcv) < 100:
-                    logger.warning(f"⚠️ Insufficient data for {config.symbol} - disabling bot")
-                    config.enabled = False
-                    continue
-                
-                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                
-                # Initialize signal generator with historical data
-                signal_generator = self.signal_generators[bot_id]
-                df_with_indicators = signal_generator._add_indicators(df)
-                
-                # Check if indicators are properly calculated
-                latest_row = df_with_indicators.iloc[-1]
-                required_indicators = ['sma_20', 'ema_8', 'ema_21', 'rsi', 'bb_upper', 'bb_lower', 'atr']
-                
-                if any(pd.isna(latest_row[indicator]) for indicator in required_indicators):
-                    logger.warning(f"⚠️ Indicators not ready for {config.symbol} - will retry during operation")
-                else:
-                    logger.info(f"✅ {config.symbol} initialized with {len(df)} periods - indicators ready")
-                    
-                    # Pre-train ML model if possible
-                    signal_generator._update_model(df_with_indicators)
-                    
-            except Exception as e:
-                logger.error(f"❌ Failed to initialize {config.symbol}: {e}")
-                config.enabled = False
-        
-        enabled_bots = sum(1 for config in self.bot_configs.values() if config.enabled)
-        logger.info(f"🤖 {enabled_bots}/{len(self.bot_configs)} bots initialized successfully")
-
     async def start(self):
         """Start the trading system."""
         logger.info("🚀 Starting Production Trading System...")
-        
-        # Initialize bots with historical data
-        await self._initialize_bots()
-        
+        await self._initialize_models()
+
         try:
             while True:
                 # Check if we need to reset daily stats
@@ -221,15 +201,6 @@ class ProductionTradingSystem:
                 # Log system status
                 self._log_system_status()
                 
-                # Clean up memory every 10 iterations (5 minutes)
-                if hasattr(self, '_iteration_count'):
-                    self._iteration_count += 1
-                else:
-                    self._iteration_count = 1
-                
-                if self._iteration_count % 10 == 0:
-                    self._cleanup_memory()
-                
                 # Wait before next iteration
                 await asyncio.sleep(30)  # Check every 30 seconds
                 
@@ -243,22 +214,13 @@ class ProductionTradingSystem:
     async def _process_bot(self, bot_id: str, config: BotConfig):
         """Process individual bot logic."""
         try:
-            # Get current market data with sufficient history for indicators
-            # We need at least 50 periods for reliable signals, but fetch more for better indicator calculation
-            ohlcv = self.exchange.fetch_ohlcv(config.symbol, config.timeframe, limit=300)
+            # Get current market data
+            ohlcv = self.exchange.fetch_ohlcv(config.symbol, config.timeframe, limit=200)
             if not ohlcv or len(ohlcv) < 100:
-                if ENHANCED_FEATURES:
-                    enhanced_logger.log(LogLevel.WARNING, LogCategory.TRADING, 
-                                      f"Insufficient historical data for {config.symbol} - got {len(ohlcv) if ohlcv else 0} periods")
                 return
             
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             current_price = df.iloc[-1]['close']
-            
-            # Log data quality for monitoring
-            if ENHANCED_FEATURES:
-                enhanced_logger.log(LogLevel.DEBUG, LogCategory.TRADING, 
-                                  f"Loaded {len(df)} periods for {config.symbol} - latest price: ${current_price:.4f}")
             
             # Generate signals
             signal_generator = self.signal_generators[bot_id]
@@ -314,11 +276,30 @@ class ProductionTradingSystem:
     async def _enter_trade(self, bot_id: str, config: BotConfig, signal: TradeSignal, current_price: float):
         """Enter a new trade."""
         try:
-            # Calculate position size
-            risk_amount = self.global_config.total_capital * config.capital_allocation * config.max_risk_per_trade
-            stop_distance = abs(current_price - signal.stop_loss) / current_price
-            position_size = risk_amount / (stop_distance * current_price)
-            
+            # Position sizing: use AdvancedRiskManager (Kelly) if available, else fixed-risk fallback
+            risk_mgr = self.risk_managers.get(bot_id)
+            if risk_mgr:
+                current_equity = self.global_config.total_capital + self.total_pnl
+                hist_returns = pd.Series(
+                    [t.pnl_pct for t in self.trade_history if t.pnl_pct is not None]
+                )
+                position_size = risk_mgr.calculate_position_size(
+                    capital=self.global_config.total_capital * config.capital_allocation,
+                    entry_price=current_price,
+                    stop_loss=signal.stop_loss,
+                    confidence=signal.confidence,
+                    current_equity=current_equity,
+                    peak_equity=self._peak_equity,
+                    returns=hist_returns if len(hist_returns) >= 10 else None,
+                )
+            else:
+                risk_amount = self.global_config.total_capital * config.capital_allocation * config.max_risk_per_trade
+                stop_distance = abs(current_price - signal.stop_loss) / current_price
+                position_size = risk_amount / (stop_distance * current_price) if stop_distance > 0 else 0
+
+            if position_size <= 0:
+                return
+
             # Create trade record
             trade_id = f"{config.symbol}_{int(time.time())}"
             trade = Trade(
@@ -329,14 +310,21 @@ class ProductionTradingSystem:
                 entry_price=current_price,
                 quantity=position_size,
                 stop_loss=signal.stop_loss,
-                take_profit=signal.take_profit
+                take_profit=signal.take_profit,
+                bot_id=bot_id,
             )
-            
+
             # Execute trade (paper trading or real)
             if self.global_config.paper_trading:
-                # Paper trading - just record the trade
+                # Simulate real execution costs: 0.1% commission + 0.05% slippage
+                commission = 0.001
+                slippage = 0.0005
+                trade.entry_price = current_price * (1 + commission + slippage)
                 self.active_trades[trade_id] = trade
-                logger.info(f"📝 Paper Trade Entered: {config.symbol} {signal.direction} @ ${current_price:.4f}")
+                logger.info(
+                    f"📝 Paper Trade Entered: {config.symbol} {signal.direction} "
+                    f"@ ${trade.entry_price:.4f} (raw: ${current_price:.4f})"
+                )
             else:
                 # Real trading - place actual order
                 order_type = 'market'
@@ -387,10 +375,20 @@ class ProductionTradingSystem:
     async def _exit_trade(self, trade: Trade, exit_price: float, reason: str):
         """Exit an existing trade."""
         try:
+            # Simulate execution costs for paper trading (same round-trip model as entry)
+            if self.global_config.paper_trading:
+                commission = 0.001
+                slippage = 0.0005
+                # Long exits via sell → price is reduced; short exits via buy → price is raised
+                if trade.direction == 1:
+                    exit_price = exit_price * (1 - commission - slippage)
+                else:
+                    exit_price = exit_price * (1 + commission + slippage)
+
             # Calculate PnL
             pnl_pct = (exit_price - trade.entry_price) / trade.entry_price * trade.direction
             pnl = trade.quantity * trade.entry_price * pnl_pct
-            
+
             # Update trade record
             trade.exit_time = int(time.time() * 1000)
             trade.exit_price = exit_price
@@ -398,10 +396,9 @@ class ProductionTradingSystem:
             trade.pnl_pct = pnl_pct
             trade.status = "closed"
             trade.reason = reason
-            
+
             # Execute exit (paper trading or real)
             if self.global_config.paper_trading:
-                # Paper trading - just record the exit
                 logger.info(f"📝 Paper Trade Exited: {trade.symbol} PnL: ${pnl:.2f} ({pnl_pct:.2%}) - {reason}")
             else:
                 # Real trading - place exit order
@@ -429,11 +426,32 @@ class ProductionTradingSystem:
             self.daily_pnl += pnl
             self.total_pnl += pnl
             self.daily_trades += 1
-            
+
+            # Update peak equity and feed risk manager for Kelly Criterion
+            current_equity = self.global_config.total_capital + self.total_pnl
+            if current_equity > self._peak_equity:
+                self._peak_equity = current_equity
+            risk_mgr = self.risk_managers.get(trade.bot_id)
+            if risk_mgr and pnl_pct is not None:
+                risk_mgr.record_trade(float(pnl_pct))
+
+            # Track daily win/loss counts for daily stats
+            if pnl > 0:
+                self._daily_wins += 1
+            else:
+                self._daily_losses += 1
+
+            # Persist to database
+            if self._trade_repo:
+                try:
+                    self._trade_repo.save(trade)
+                except Exception as exc:
+                    logger.warning(f"Could not persist trade {trade.id}: {exc}")
+
             # Move to trade history
             self.trade_history.append(trade)
             del self.active_trades[trade.id]
-            
+
         except Exception as e:
             logger.error(f"Error exiting trade: {e}")
     
@@ -441,20 +459,35 @@ class ProductionTradingSystem:
         """Check if we need to reset daily statistics."""
         current_date = datetime.now().date()
         if current_date != self.last_reset_date:
-            # Log daily summary
-            logger.info(f"📊 Daily Summary - PnL: ${self.daily_pnl:.2f}, Trades: {self.daily_trades}")
-            
-            # Save daily stats
+            date_str = self.last_reset_date.isoformat()
+            logger.info(
+                f"📊 Daily Summary [{date_str}] — "
+                f"PnL: ${self.daily_pnl:.2f}, Trades: {self.daily_trades}, "
+                f"Wins: {self._daily_wins}, Losses: {self._daily_losses}"
+            )
+
+            # Persist daily stats
             self.daily_stats.append({
-                'date': self.last_reset_date.isoformat(),
+                'date': date_str,
                 'pnl': self.daily_pnl,
                 'trades': self.daily_trades,
-                'active_trades': len(self.active_trades)
+                'wins': self._daily_wins,
+                'losses': self._daily_losses,
             })
-            
+            if self._daily_repo:
+                try:
+                    self._daily_repo.save(
+                        date_str, self.daily_pnl, self.daily_trades,
+                        self._daily_wins, self._daily_losses
+                    )
+                except Exception as exc:
+                    logger.warning(f"Could not persist daily stats: {exc}")
+
             # Reset daily counters
             self.daily_pnl = 0.0
             self.daily_trades = 0
+            self._daily_wins = 0
+            self._daily_losses = 0
             self.last_reset_date = current_date
     
     def _check_emergency_stops(self) -> bool:
@@ -469,17 +502,30 @@ class ProductionTradingSystem:
     def _update_metrics(self):
         """Update system performance metrics."""
         current_equity = self.global_config.total_capital + self.total_pnl
-        
+
         self.equity_curve.append({
             'timestamp': int(time.time() * 1000),
             'equity': current_equity,
             'active_trades': len(self.active_trades),
             'daily_pnl': self.daily_pnl
         })
-        
-        # Keep only last 1000 points to manage memory
+
+        # Keep only last 1000 points in memory
         if len(self.equity_curve) > 1000:
             self.equity_curve = self.equity_curve[-1000:]
+
+        # Persist equity snapshot every 20 calls (~10 minutes at 30s cadence)
+        self._equity_snapshot_counter += 1
+        if self._equity_repo and self._equity_snapshot_counter % 20 == 0:
+            try:
+                self._equity_repo.save(
+                    equity=current_equity,
+                    total_pnl=self.total_pnl,
+                    daily_pnl=self.daily_pnl,
+                    active_trades=len(self.active_trades),
+                )
+            except Exception as exc:
+                logger.warning(f"Could not persist equity snapshot: {exc}")
     
     def _log_system_status(self):
         """Log current system status."""
@@ -528,6 +574,82 @@ class ProductionTradingSystem:
         self._save_system_state()
         logger.critical("🛑 Emergency shutdown complete")
     
+    def _load_history_from_db(self):
+        """Restore trade history from DB so Kelly Criterion works from the first signal."""
+        if not self._trade_repo:
+            return
+        try:
+            pnl_pcts = self._trade_repo.get_recent_pnl_pcts(limit=200)
+            if not pnl_pcts:
+                return
+            for bot_id, risk_mgr in self.risk_managers.items():
+                for pnl_pct in pnl_pcts:
+                    risk_mgr.record_trade(pnl_pct)
+            self.total_pnl = sum(self._trade_repo.get_recent_pnl_pcts(limit=10_000))  # rough equity
+            logger.info(
+                f"Loaded {len(pnl_pcts)} historical trades from DB "
+                f"(Kelly Criterion seeded)"
+            )
+        except Exception as exc:
+            logger.warning(f"Could not load history from DB: {exc}")
+
+    async def _fetch_historical_data(self, symbol: str, timeframe: str, days: int = 365) -> pd.DataFrame:
+        """Fetch up to `days` of OHLCV history using CCXT pagination."""
+        tf_minutes = {
+            '1m': 1, '3m': 3, '5m': 5, '15m': 15,
+            '30m': 30, '1h': 60, '4h': 240, '1d': 1440,
+        }
+        tf_min = tf_minutes.get(timeframe, 5)
+        since = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
+        step_ms = tf_min * 60 * 1000 * 1000  # 1000 candles per batch
+
+        all_ohlcv = []
+        limit = 1000
+
+        while True:
+            try:
+                batch = self.exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=limit)
+            except Exception as e:
+                logger.error(f"Error fetching history for {symbol} {timeframe}: {e}")
+                break
+
+            if not batch:
+                break
+
+            all_ohlcv.extend(batch)
+            since = batch[-1][0] + tf_min * 60 * 1000  # advance by one candle
+
+            if len(batch) < limit:
+                break
+
+            await asyncio.sleep(0.3)  # respect Binance rate limit
+
+        if not all_ohlcv:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df = df.drop_duplicates(subset='timestamp').sort_values('timestamp').reset_index(drop=True)
+        logger.info(f"Fetched {len(df)} candles for {symbol} {timeframe} ({days}d history)")
+        return df
+
+    async def _initialize_models(self):
+        """Pre-train ML models with historical data before the live loop starts."""
+        logger.info("Pre-training ML models with historical data...")
+        initialized = 0
+
+        for bot_id, config in self.bot_configs.items():
+            try:
+                df = await self._fetch_historical_data(config.symbol, config.timeframe, days=365)
+                if df.empty:
+                    logger.warning(f"No historical data for {bot_id} — model will warm up on live data")
+                    continue
+                self.signal_generators[bot_id].initialize_from_history(df)
+                initialized += 1
+            except Exception as e:
+                logger.warning(f"Could not pre-train model for {bot_id}: {e}")
+
+        logger.info(f"ML pre-training complete: {initialized}/{len(self.bot_configs)} bots initialized")
+
     def _save_system_state(self):
         """Save current system state to file."""
         state = {
@@ -535,9 +657,9 @@ class ProductionTradingSystem:
             'total_pnl': self.total_pnl,
             'daily_pnl': self.daily_pnl,
             'active_trades': [asdict(trade) for trade in self.active_trades.values()],
-            'trade_history': [asdict(trade) for trade in self.trade_history[-200:]],  # Last 200 trades (increased from 100)
+            'trade_history': [asdict(trade) for trade in self.trade_history[-100:]],  # Last 100 trades
             'daily_stats': self.daily_stats[-30:],  # Last 30 days
-            'equity_curve': self.equity_curve[-500:]  # Last 500 points (increased from 100)
+            'equity_curve': self.equity_curve[-100:]  # Last 100 points
         }
         
         filename = f"system_state_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -545,36 +667,6 @@ class ProductionTradingSystem:
             json.dump(state, f, indent=2)
         
         logger.info(f"💾 System state saved to {filename}")
-    
-    def _cleanup_memory(self):
-        """Clean up memory by limiting historical data."""
-        # Limit trade history to prevent memory growth
-        if len(self.trade_history) > 200:
-            self.trade_history = self.trade_history[-200:]
-            logger.info(f"🧹 Cleaned trade history, keeping last 200 trades")
-        
-        # Limit equity curve to prevent memory growth
-        if len(self.equity_curve) > 500:
-            self.equity_curve = self.equity_curve[-500:]
-            logger.info(f"🧹 Cleaned equity curve, keeping last 500 points")
-        
-        # Limit daily stats to prevent memory growth
-        if len(self.daily_stats) > 30:
-            self.daily_stats = self.daily_stats[-30:]
-            logger.info(f"🧹 Cleaned daily stats, keeping last 30 days")
-        
-        # Clean up closed trades older than 24 hours
-        current_time = int(datetime.now().timestamp() * 1000)
-        old_trades = []
-        for trade_id, trade in list(self.active_trades.items()):
-            if trade.status == "closed" and current_time - trade.entry_time > 86400000:  # 24 hours
-                old_trades.append(trade_id)
-        
-        for trade_id in old_trades:
-            del self.active_trades[trade_id]
-        
-        if old_trades:
-            logger.info(f"🧹 Cleaned {len(old_trades)} old closed trades from active_trades")
 
 
 class OptimizedSignalGenerator:
@@ -586,125 +678,70 @@ class OptimizedSignalGenerator:
         self.scaler = StandardScaler()
         self.model = None
         self.is_fitted = False
-        
+        self._retrain_counter = 0
+        self._retrain_interval = 500  # retrain every 500 calls (~4h at 30s cadence)
+
         # Get optimized parameters
         self.params = self._get_optimized_params(symbol, timeframe)
     
     def _get_optimized_params(self, symbol: str, timeframe: str) -> Dict[str, Any]:
-        """Get optimized parameters based on backtest results and effectiveness analysis."""
-        # Optimized configurations for better trade frequency while maintaining robustness
-        key = f"{symbol}_{timeframe}"
-        
-        # Specific optimized parameters for each pair/timeframe
-        optimized_params = {
-            'BTC/USDT_1m': {
-                'momentum_threshold': 0.006,
-                'volume_threshold': 1.5,
-                'rsi_oversold': 32,
-                'rsi_overbought': 68,
-                'confidence_multiplier': 1.1,
-                'ml_threshold': 0.52
-            },
-            'BTC/USDT_5m': {
-                'momentum_threshold': 0.007,
-                'volume_threshold': 1.6,
-                'rsi_oversold': 33,
-                'rsi_overbought': 67,
-                'confidence_multiplier': 1.15,
-                'ml_threshold': 0.53
-            },
-            'ETH/USDT_1m': {
-                'momentum_threshold': 0.007,
-                'volume_threshold': 1.6,
-                'rsi_oversold': 33,
-                'rsi_overbought': 67,
-                'confidence_multiplier': 1.1,
-                'ml_threshold': 0.53
-            },
-            'LINK/USDT_5m': {
-                'momentum_threshold': 0.007,  # More sensitive than before
-                'volume_threshold': 1.6,      # Lower threshold for more signals
-                'rsi_oversold': 33,           # Slightly adjusted
-                'rsi_overbought': 67,
-                'confidence_multiplier': 1.15,
-                'ml_threshold': 0.53          # Slightly more aggressive
-            },
-            'LINK/USDT_1m': {
-                'momentum_threshold': 0.006,  # More sensitive
-                'volume_threshold': 1.5,      # Lower threshold
-                'rsi_oversold': 32,
-                'rsi_overbought': 68,
-                'confidence_multiplier': 1.1,
-                'ml_threshold': 0.52          # More aggressive
-            },
-            'ADA/USDT_1m': {
-                'momentum_threshold': 0.006,
-                'volume_threshold': 1.5,
-                'rsi_oversold': 32,
-                'rsi_overbought': 68,
-                'confidence_multiplier': 1.1,
-                'ml_threshold': 0.52
-            },
-            'ADA/USDT_5m': {
-                'momentum_threshold': 0.007,
-                'volume_threshold': 1.6,
-                'rsi_oversold': 33,
-                'rsi_overbought': 67,
-                'confidence_multiplier': 1.15,
-                'ml_threshold': 0.53
-            },
-            'SOL/USDT_5m': {
-                'momentum_threshold': 0.008,
-                'volume_threshold': 1.7,
-                'rsi_oversold': 34,
-                'rsi_overbought': 66,
+        """Get optimized parameters based on backtest results."""
+        # Best performing configurations
+        if symbol == 'LINK/USDT' and timeframe == '5m':
+            return {
+                'momentum_threshold': 0.003,   # 0.3% in 5 bars (was 0.8% — too rare)
+                'volume_threshold': 1.5,        # 1.5x avg volume (was 1.8)
+                'rsi_oversold': 38,
+                'rsi_overbought': 62,
                 'confidence_multiplier': 1.2,
-                'ml_threshold': 0.54
-            },
-            'SOL/USDT_15m': {
-                'momentum_threshold': 0.009,
+                'ml_threshold': 0.55
+            }
+        elif symbol == 'LINK/USDT' and timeframe == '1m':
+            return {
+                'momentum_threshold': 0.002,   # 0.2% in 5 bars for 1m
+                'volume_threshold': 1.5,
+                'rsi_oversold': 38,
+                'rsi_overbought': 62,
+                'confidence_multiplier': 1.2,
+                'ml_threshold': 0.55
+            }
+        elif symbol == 'ADA/USDT' and timeframe == '1m':
+            return {
+                'momentum_threshold': 0.002,
+                'volume_threshold': 1.5,
+                'rsi_oversold': 38,
+                'rsi_overbought': 62,
+                'confidence_multiplier': 1.2,
+                'ml_threshold': 0.55
+            }
+        else:
+            return {
+                'momentum_threshold': 0.004,
                 'volume_threshold': 1.8,
                 'rsi_oversold': 35,
                 'rsi_overbought': 65,
-                'confidence_multiplier': 1.25,
-                'ml_threshold': 0.55
+                'confidence_multiplier': 1.0,
+                'ml_threshold': 0.58
             }
-        }
-        
-        # Return specific params if available, otherwise use optimized defaults
-        return optimized_params.get(key, {
-            'momentum_threshold': 0.008,      # More sensitive than original 0.012
-            'volume_threshold': 1.8,          # Lower than original 2.2
-            'rsi_oversold': 32,               # Slightly more aggressive
-            'rsi_overbought': 68,
-            'confidence_multiplier': 1.0,
-            'ml_threshold': 0.55              # More aggressive than 0.6
-        })
     
     def generate_signals(self, df: pd.DataFrame) -> List[TradeSignal]:
         """Generate trading signals."""
         try:
             # Add technical indicators
             df = self._add_indicators(df)
-            
-            # Train/update ML model
-            self._update_model(df)
+
+            # Retrain periodically — never every call (too slow, causes scaler drift)
+            self._retrain_counter += 1
+            if not self.is_fitted or self._retrain_counter % self._retrain_interval == 0:
+                self._update_model(df)
             
             # Generate signals
             signals = []
             
-            # Ensure we have enough data and indicators are properly calculated
             if len(df) < 50:
                 return signals
             
-            # Check if key indicators are available (not NaN) in the latest row
             latest_row = df.iloc[-1]
-            required_indicators = ['sma_20', 'ema_8', 'ema_21', 'rsi', 'bb_upper', 'bb_lower', 'atr']
-            
-            if any(pd.isna(latest_row[indicator]) for indicator in required_indicators):
-                # Skip this iteration if indicators are not ready
-                return signals
-            
             current_price = latest_row['close']
             
             # Generate different types of signals
@@ -876,23 +913,17 @@ class OptimizedSignalGenerator:
             X_scaled = self.scaler.transform(features)
             proba = self.model.predict_proba(X_scaled)[0]
             
-            # Convert to signal
+            # Convert to signal — ML model is binary ("will price go up?")
+            # It can only generate LONG signals; short signals come from rule-based only.
             if len(proba) >= 2:
-                buy_prob = proba[1] if len(proba) == 2 else proba[1]
-                
+                buy_prob = proba[1]
+
                 if buy_prob > self.params['ml_threshold']:
                     return {
                         'type': 'ml',
                         'direction': 1,
                         'strength': min((buy_prob - 0.5) * 2, 1.0),
                         'confidence': buy_prob
-                    }
-                elif buy_prob < (1 - self.params['ml_threshold']):
-                    return {
-                        'type': 'ml',
-                        'direction': -1,
-                        'strength': min((0.5 - buy_prob) * 2, 1.0),
-                        'confidence': 1 - buy_prob
                     }
             
         except Exception as e:
@@ -904,19 +935,7 @@ class OptimizedSignalGenerator:
         """Combine multiple signals into one."""
         valid_signals = [s for s in signals if s is not None]
         
-        if len(valid_signals) == 0:
-            return None
-        
-        # Allow single high-confidence signals
-        if len(valid_signals) == 1:
-            signal = valid_signals[0]
-            if signal['confidence'] >= 0.7:  # High confidence threshold for single signals
-                return {
-                    'direction': signal['direction'],
-                    'strength': signal['strength'],
-                    'confidence': signal['confidence'],
-                    'metadata': {signal['type']: signal}
-                }
+        if len(valid_signals) < 2:
             return None
         
         # Weighted voting
@@ -978,15 +997,17 @@ class OptimizedSignalGenerator:
             if len(X) < 50 or y.sum() < 5:
                 return
             
-            # Train model
             if not self.is_fitted:
-                self.model = RandomForestClassifier(n_estimators=50, max_depth=8, random_state=42)
-            
-            # Use only recent data for training
+                self.model = RandomForestClassifier(
+                    n_estimators=100, max_depth=6, min_samples_leaf=5,
+                    class_weight='balanced', n_jobs=-1, random_state=42
+                )
+
+            # Use only recent data; last row already excluded via NaN label (shift(-1))
             recent_data = min(200, len(X))
             X_recent = X.iloc[-recent_data:]
             y_recent = y.iloc[-recent_data:]
-            
+
             X_scaled = self.scaler.fit_transform(X_recent)
             self.model.fit(X_scaled, y_recent)
             self.is_fitted = True
@@ -1002,133 +1023,171 @@ class OptimizedSignalGenerator:
         ]
         
         available_features = [col for col in feature_cols if col in df.columns]
-        return df[available_features].fillna(method='ffill').fillna(0)
+        return df[available_features].ffill().fillna(0)
     
     def _create_labels(self, df: pd.DataFrame) -> pd.Series:
-        """Create labels for ML training."""
-        future_returns = df['close'].shift(-2) / df['close'] - 1
-        labels = np.where(future_returns > 0.008, 1, 0)
-        return pd.Series(labels, index=df.index)
+        """Create labels for ML training.
+        Label at row T = 1 if close[T+1] > close[T] + round-trip costs (0.3%).
+        Threshold of 0.003 gives ~25-35% positive rate — balanced enough to train on.
+        The last row always gets NaN (no T+1 yet) and is excluded by callers.
+        """
+        future_returns = df['close'].shift(-1) / df['close'] - 1
+        # 0.003 = 0.3% covers round-trip commission+slippage and leaves a real edge
+        labels = np.where(future_returns > 0.003, 1, np.where(future_returns.isna(), np.nan, 0))
+        return pd.Series(labels, index=df.index, dtype=float)
+
+
+    def initialize_from_history(self, df: pd.DataFrame):
+        """Train the ML model on a large historical dataset at startup.
+
+        Should be called once before live trading begins. Uses walk-forward
+        validation to report whether the signal has any predictive lift, then
+        trains the final model on the full history.
+        """
+        try:
+            if len(df) < 200:
+                logger.warning(f"[{self.symbol}] Too few historical rows ({len(df)}) for initialization")
+                return
+
+            df = self._add_indicators(df.copy())
+
+            wf = self.walk_forward_validate(df)
+            logger.info(
+                f"[{self.symbol}/{self.timeframe}] Walk-forward: "
+                f"accuracy={wf.get('avg_accuracy', 0):.3f}, "
+                f"baseline={wf.get('avg_baseline', 0):.3f}, "
+                f"lift={wf.get('avg_lift', 0):+.3f}, "
+                f"valid={wf.get('valid', False)}"
+            )
+
+            features = self._prepare_features(df)
+            labels = self._create_labels(df)
+            valid_idx = ~(features.isna().any(axis=1) | labels.isna())
+            X = features[valid_idx]
+            y = labels[valid_idx]
+
+            if len(X) < 100 or y.sum() < 10:
+                logger.warning(f"[{self.symbol}] Not enough valid samples after cleaning: {len(X)}")
+                return
+
+            self.model = RandomForestClassifier(
+                n_estimators=200, max_depth=6, min_samples_leaf=10,
+                class_weight='balanced', n_jobs=-1, random_state=42
+            )
+            X_scaled = self.scaler.fit_transform(X)
+            self.model.fit(X_scaled, y)
+            self.is_fitted = True
+
+            logger.info(
+                f"[{self.symbol}/{self.timeframe}] Model trained on {len(X)} samples, "
+                f"positive_rate={y.mean():.2%}"
+            )
+
+        except Exception as e:
+            logger.error(f"Error in initialize_from_history for {self.symbol}: {e}")
+
+    def walk_forward_validate(self, df: pd.DataFrame, n_splits: int = 5) -> Dict[str, Any]:
+        """Walk-forward cross-validation across n_splits time folds.
+
+        Each fold trains on the past and tests on the future — never the reverse.
+        Returns accuracy metrics and a 'valid' flag (True if lift > 2% above
+        majority-class baseline).
+        """
+        try:
+            features = self._prepare_features(df)
+            labels = self._create_labels(df)
+            valid_idx = ~(features.isna().any(axis=1) | labels.isna())
+            X = features[valid_idx].values
+            y = labels[valid_idx].values
+
+            min_test = max(100, len(X) // (n_splits + 2))
+            if len(X) < min_test * 3:
+                return {'valid': False, 'reason': f'too_few_samples:{len(X)}'}
+
+            tscv = TimeSeriesSplit(n_splits=n_splits, test_size=min_test)
+            fold_metrics = []
+
+            for fold, (train_idx, test_idx) in enumerate(tscv.split(X)):
+                if len(train_idx) < 100 or y[train_idx].sum() < 5:
+                    continue
+
+                X_train, X_test = X[train_idx], X[test_idx]
+                y_train, y_test = y[train_idx], y[test_idx]
+
+                fold_scaler = StandardScaler()
+                X_tr_s = fold_scaler.fit_transform(X_train)
+                X_te_s = fold_scaler.transform(X_test)
+
+                fold_model = RandomForestClassifier(
+                    n_estimators=50, max_depth=6, min_samples_leaf=5,
+                    class_weight='balanced', random_state=42
+                )
+                fold_model.fit(X_tr_s, y_train)
+
+                y_pred = fold_model.predict(X_te_s)
+                acc = accuracy_score(y_test, y_pred)
+                baseline = float(max(y_test.mean(), 1 - y_test.mean()))
+
+                fold_metrics.append({
+                    'fold': fold,
+                    'accuracy': float(acc),
+                    'baseline': baseline,
+                    'lift': float(acc - baseline),
+                    'n_train': len(train_idx),
+                    'n_test': len(test_idx),
+                })
+
+            if not fold_metrics:
+                return {'valid': False, 'reason': 'no_valid_folds'}
+
+            avg_acc = float(np.mean([m['accuracy'] for m in fold_metrics]))
+            avg_baseline = float(np.mean([m['baseline'] for m in fold_metrics]))
+            avg_lift = avg_acc - avg_baseline
+
+            return {
+                'valid': avg_lift > 0.02,
+                'avg_accuracy': avg_acc,
+                'avg_baseline': avg_baseline,
+                'avg_lift': avg_lift,
+                'folds': fold_metrics,
+            }
+
+        except Exception as e:
+            logger.error(f"walk_forward_validate error for {self.symbol}: {e}")
+            return {'valid': False, 'reason': str(e)}
 
 
 def create_production_config() -> Tuple[GlobalConfig, List[BotConfig]]:
-    """Create optimized production configuration for better effectiveness."""
+    """Create production configuration based on backtest results."""
     
-    # Conservative optimized configuration - balances safety with effectiveness
     global_config = GlobalConfig(
-        total_capital=1200.0,
-        max_concurrent_trades=3,  # Increased from 2 for more opportunities
-        daily_loss_limit=0.045,  # 4.5% - slightly increased for more flexibility
-        daily_profit_target=0.025,  # 2.5% target maintained
+        total_capital=1200.0,  # Capital mínimo otimizado para Brasil (R$ 6,000)
+        max_concurrent_trades=2,  # Reduzido para menor capital
+        daily_loss_limit=0.04,  # 4% perda máxima diária
+        daily_profit_target=0.025,  # 2.5% meta diária
         emergency_stop_drawdown=0.08,
-        paper_trading=True
+        paper_trading=True  # Start with paper trading
     )
     
-    # Diversified bot configuration with optimized parameters
+    # Configuração otimizada para capital mínimo - apenas 2 bots mais lucrativos
     bot_configs = [
-        # Main performer with optimized parameters
         BotConfig(
             symbol='LINK/USDT',
             timeframe='5m',
-            capital_allocation=0.40,  # 40% allocation
-            max_risk_per_trade=0.025,
-            confidence_threshold=0.60,  # Lowered from 0.65 for more signals
-            stop_loss_pct=0.018,
-            take_profit_pct=0.035,
-            enabled=True
+            capital_allocation=0.70,  # 70% para o melhor performer (18.57% retorno)
+            max_risk_per_trade=0.025,  # 2.5% risco por trade
+            confidence_threshold=0.65,
+            stop_loss_pct=0.018,  # 1.8% stop loss
+            take_profit_pct=0.035  # 3.5% take profit
         ),
-        # High-frequency component with better parameters
         BotConfig(
             symbol='LINK/USDT',
             timeframe='1m',
-            capital_allocation=0.25,  # 25% allocation
-            max_risk_per_trade=0.022,
-            confidence_threshold=0.58,  # Lowered from 0.65
-            stop_loss_pct=0.015,
-            take_profit_pct=0.030,
-            enabled=True
-        ),
-        # Diversification with BTC for stability and more opportunities
-        BotConfig(
-            symbol='BTC/USDT',
-            timeframe='5m',
-            capital_allocation=0.35,  # 35% allocation
-            max_risk_per_trade=0.028,
-            confidence_threshold=0.58,  # Optimized threshold
-            stop_loss_pct=0.020,
-            take_profit_pct=0.038,
-            enabled=True
-        )
-    ]
-    
-    return global_config, bot_configs
-
-
-def create_aggressive_production_config() -> Tuple[GlobalConfig, List[BotConfig]]:
-    """Create more aggressive configuration for higher trading activity."""
-    
-    global_config = GlobalConfig(
-        total_capital=1200.0,
-        max_concurrent_trades=5,  # Higher activity
-        daily_loss_limit=0.055,  # 5.5%
-        daily_profit_target=0.035,  # 3.5%
-        emergency_stop_drawdown=0.09,
-        paper_trading=True
-    )
-    
-    bot_configs = [
-        # Multiple 1m scalping bots for high frequency
-        BotConfig(
-            symbol='BTC/USDT',
-            timeframe='1m',
-            capital_allocation=0.25,
-            max_risk_per_trade=0.025,
-            confidence_threshold=0.55,  # More aggressive
-            stop_loss_pct=0.012,
-            take_profit_pct=0.022,
-            enabled=True
-        ),
-        BotConfig(
-            symbol='ETH/USDT',
-            timeframe='1m',
-            capital_allocation=0.20,
-            max_risk_per_trade=0.025,
-            confidence_threshold=0.55,
-            stop_loss_pct=0.012,
-            take_profit_pct=0.022,
-            enabled=True
-        ),
-        # Medium frequency bots
-        BotConfig(
-            symbol='LINK/USDT',
-            timeframe='5m',
-            capital_allocation=0.20,
-            max_risk_per_trade=0.028,
-            confidence_threshold=0.57,
-            stop_loss_pct=0.018,
-            take_profit_pct=0.032,
-            enabled=True
-        ),
-        BotConfig(
-            symbol='ADA/USDT',
-            timeframe='5m',
-            capital_allocation=0.18,
-            max_risk_per_trade=0.030,
-            confidence_threshold=0.57,
-            stop_loss_pct=0.018,
-            take_profit_pct=0.032,
-            enabled=True
-        ),
-        # Swing trading component
-        BotConfig(
-            symbol='SOL/USDT',
-            timeframe='15m',
-            capital_allocation=0.17,
-            max_risk_per_trade=0.032,
-            confidence_threshold=0.58,
-            stop_loss_pct=0.022,
-            take_profit_pct=0.038,
-            enabled=True
+            capital_allocation=0.30,  # 30% para alta frequência (18.10% retorno)
+            max_risk_per_trade=0.020,  # 2.0% risco por trade
+            confidence_threshold=0.65,
+            stop_loss_pct=0.015,  # 1.5% stop loss
+            take_profit_pct=0.030  # 3.0% take profit
         )
     ]
     

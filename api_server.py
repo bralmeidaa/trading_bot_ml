@@ -3,11 +3,12 @@
 API Server for Trading Bot ML Frontend
 Provides REST API endpoints for the dashboard frontend.
 """
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, Response
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 import json
 import os
 import asyncio
@@ -18,69 +19,20 @@ from pathlib import Path
 # Import our trading system
 from production_trading_system import ProductionTradingSystem, GlobalConfig, BotConfig, create_production_config
 
-# Import configuration and logging systems
-from config_manager import config_manager
-from enhanced_logging import enhanced_logger, LogLevel, LogCategory
-
 app = FastAPI(title="Trading Bot ML API", version="1.0.0")
+
+# CORS — allows the frontend (served at any port) to call the API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Global trading system instance
 trading_system: Optional[ProductionTradingSystem] = None
-system_logs = []  # Store system logs in memory
 system_task: Optional[asyncio.Task] = None
-
-def add_system_log(level: str, message: str, source: str = "system"):
-    """Add a log entry to the system logs."""
-    global system_logs
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    log_entry = {
-        "timestamp": timestamp,
-        "level": level,
-        "message": message,
-        "source": source
-    }
-    system_logs.append(log_entry)
-    # Keep only last 50 logs to prevent memory issues (reduced from 100)
-    if len(system_logs) > 50:
-        system_logs = system_logs[-50:]
-
-def load_config_from_file() -> Tuple[GlobalConfig, List[BotConfig]]:
-    """Load configuration from trading_config.json file."""
-    try:
-        with open('trading_config.json', 'r') as f:
-            config_data = json.load(f)
-        
-        # Create GlobalConfig from file
-        global_config = GlobalConfig(
-            total_capital=config_data['global_config']['total_capital'],
-            max_concurrent_trades=config_data['global_config']['max_concurrent_trades'],
-            daily_loss_limit=config_data['global_config']['daily_loss_limit'],
-            daily_profit_target=config_data['global_config']['daily_profit_target'],
-            emergency_stop_drawdown=config_data['global_config']['emergency_stop_drawdown'],
-            paper_trading=config_data['global_config']['paper_trading']
-        )
-        
-        # Create BotConfig list from file
-        bot_configs = []
-        for bot_data in config_data['bot_configs']:
-            bot_config = BotConfig(
-                symbol=bot_data['symbol'],
-                timeframe=bot_data['timeframe'],
-                capital_allocation=bot_data['capital_allocation'],
-                max_risk_per_trade=bot_data['max_risk_per_trade'],
-                confidence_threshold=bot_data['confidence_threshold'],
-                stop_loss_pct=bot_data['stop_loss_pct'],
-                take_profit_pct=bot_data['take_profit_pct'],
-                enabled=bot_data['enabled']
-            )
-            bot_configs.append(bot_config)
-        
-        return global_config, bot_configs
-        
-    except Exception as e:
-        add_system_log("ERROR", f"Failed to load config from file: {e}", "config")
-        # Fallback to default config
-        return create_production_config()
 
 # Pydantic models for API
 class SystemStatus(BaseModel):
@@ -119,33 +71,21 @@ class EquityPoint(BaseModel):
     timestamp: int
     equity: float
 
-class SystemLog(BaseModel):
-    timestamp: str
-    level: str
-    message: str
-    source: str
-
 class ConfigUpdate(BaseModel):
     trading_mode: str
     total_capital: float
+    daily_loss_limit: float
+    daily_profit_target: float
 
-class BotConfigUpdate(BaseModel):
+class NewBotConfig(BaseModel):
     symbol: str
     timeframe: str
-    enabled: bool
-    risk_per_trade: float
-    max_positions: int
-    stop_loss: float
-    take_profit: float
-
-# New models for enhanced configuration and logging
-class GlobalConfigUpdate(BaseModel):
-    total_capital: Optional[float] = None
-    max_concurrent_trades: Optional[int] = None
-    daily_loss_limit: Optional[float] = None
-    daily_profit_target: Optional[float] = None
-    emergency_stop_drawdown: Optional[float] = None
-    paper_trading: Optional[bool] = None
+    capital_allocation: float
+    max_risk_per_trade: float
+    confidence_threshold: float = 0.65
+    stop_loss_pct: float = 0.018
+    take_profit_pct: float = 0.035
+    enabled: bool = True
 
 class BotConfigUpdate(BaseModel):
     capital_allocation: Optional[float] = None
@@ -155,29 +95,24 @@ class BotConfigUpdate(BaseModel):
     take_profit_pct: Optional[float] = None
     enabled: Optional[bool] = None
 
-class NewBotConfig(BaseModel):
-    symbol: str
-    timeframe: str
-    capital_allocation: float
-    max_risk_per_trade: float
-    confidence_threshold: float
-    stop_loss_pct: float
-    take_profit_pct: float
-    enabled: bool = True
+# Static files — serve React build if available, skip gracefully if not
+_REACT_DIST = Path("frontend_react/dist")
+_LEGACY_FRONTEND = Path("frontend")
 
-class LogFilter(BaseModel):
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    level: Optional[str] = None
-    category: Optional[str] = None
-    bot_id: Optional[str] = None
-    symbol: Optional[str] = None
-    limit: int = 1000
+if _REACT_DIST.exists():
+    app.mount("/static", StaticFiles(directory=str(_REACT_DIST)), name="static")
+elif _LEGACY_FRONTEND.exists():
+    app.mount("/static", StaticFiles(directory=str(_LEGACY_FRONTEND)), name="static")
 
-# Note: Static files mounting is done in main() function after all API routes are defined
-# This prevents conflicts between API routes and static file serving
+@app.get("/", response_class=HTMLResponse)
+async def read_root():
+    """Serve the dashboard (React build or legacy HTML)."""
+    for candidate in [_REACT_DIST / "index.html", _LEGACY_FRONTEND / "index.html"]:
+        if candidate.exists():
+            return HTMLResponse(content=candidate.read_text(encoding="utf-8"))
+    return HTMLResponse(content="<h1>Dashboard not found — run <code>npm run build</code> inside frontend_react/</h1>", status_code=404)
 
-@app.get("/api/status")
+@app.get("/api/status", response_model=SystemStatus)
 async def get_system_status():
     """Get current system status."""
     global trading_system, system_task
@@ -189,171 +124,97 @@ async def get_system_status():
         uptime_delta = datetime.now() - trading_system.system_start_time
         uptime = str(uptime_delta).split('.')[0]  # Remove microseconds
         
-        status_data = {
-            "running": running,
-            "uptime": uptime,
-            "total_capital": trading_system.global_config.total_capital,
-            "paper_trading": trading_system.global_config.paper_trading
-        }
-        return {"success": True, "data": status_data}
+        return SystemStatus(
+            running=running,
+            uptime=uptime,
+            total_capital=trading_system.global_config.total_capital,
+            paper_trading=trading_system.global_config.paper_trading
+        )
     
-    # System is not running - get values from config file
-    try:
-        config_data = config_manager.get_configuration_dict()
-        global_config = config_data.get("global_config", {})
-        
-        status_data = {
-            "running": False,
-            "uptime": "0:00:00",
-            "total_capital": global_config.get("total_capital", 10000.0),
-            "paper_trading": global_config.get("paper_trading", True)
-        }
-        return {"success": True, "data": status_data}
-    except Exception as e:
-        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.API, f"Error loading config for status: {e}")
-        status_data = {
-            "running": False,
-            "uptime": "0:00:00",
-            "total_capital": 10000.0,
-            "paper_trading": True
-        }
-        return {"success": True, "data": status_data}
+    return SystemStatus(
+        running=False,
+        uptime="0:00:00",
+        total_capital=10000.0,
+        paper_trading=True
+    )
 
-@app.get("/api/system/status")
-async def get_detailed_system_status():
-    """Get detailed system status including all components."""
-    global trading_system
-    
-    base_status = await get_system_status()
-    
-    # Add detailed component status
-    detailed_status = {
-        "system": base_status["data"],
-        "components": {
-            "trading_engine": "active" if trading_system else "inactive",
-            "regime_detection": "active",
-            "ml_ensemble": "active", 
-            "specialized_bots": "active",
-            "continuous_learning": "active"
-        },
-        "health": {
-            "overall": "healthy" if trading_system else "stopped",
-            "api": "healthy",
-            "database": "healthy",
-            "exchange_connection": "healthy"
-        }
-    }
-    
-    return {"success": True, "data": detailed_status}
-
-@app.get("/api/metrics")
+@app.get("/api/metrics", response_model=PerformanceMetrics)
 async def get_performance_metrics():
     """Get current performance metrics."""
     global trading_system
     
     if trading_system:
-        # Calculate metrics from trade history
-        total_trades = 0
-        winning_trades = 0
-        total_pnl = 0.0
-        active_trades = 0
-        
-        if hasattr(trading_system, 'trade_history') and trading_system.trade_history:
-            total_trades = len(trading_system.trade_history)
-            winning_trades = len([t for t in trading_system.trade_history if t.pnl and t.pnl > 0])
-            total_pnl = sum(t.pnl for t in trading_system.trade_history if t.pnl)
-            active_trades = len([t for t in trading_system.trade_history if t.status == 'open'])
-        
+        # Calculate win rate from trade history
+        winning_trades = len([t for t in trading_system.trade_history if t.pnl and t.pnl > 0])
+        total_trades = len(trading_system.trade_history)
         win_rate = winning_trades / total_trades if total_trades > 0 else 0.0
         
-        # Calculate total ROI
-        total_capital = 1200.0  # Default capital from config
-        if hasattr(trading_system, 'global_config') and trading_system.global_config:
-            total_capital = trading_system.global_config.total_capital
-        
-        total_roi = total_pnl / total_capital if total_capital > 0 else 0.0
-        
-        # Calculate max drawdown (simplified)
+        # Calculate max drawdown from equity curve
         max_drawdown = 0.0
-        if hasattr(trading_system, 'trade_history') and trading_system.trade_history:
-            running_pnl = 0.0
-            peak_pnl = 0.0
-            for trade in trading_system.trade_history:
-                if trade.pnl:
-                    running_pnl += trade.pnl
-                    if running_pnl > peak_pnl:
-                        peak_pnl = running_pnl
-                    if peak_pnl > 0:
-                        drawdown = (peak_pnl - running_pnl) / peak_pnl
-                        max_drawdown = max(max_drawdown, drawdown)
+        if trading_system.equity_curve:
+            equity_values = [point['equity'] for point in trading_system.equity_curve]
+            peak = equity_values[0]
+            for equity in equity_values:
+                if equity > peak:
+                    peak = equity
+                drawdown = (peak - equity) / peak
+                max_drawdown = max(max_drawdown, drawdown)
         
-        metrics_data = {
-            "total_pnl": total_pnl,
-            "total_roi": total_roi,
-            "daily_pnl": total_pnl,  # Simplified - using total as daily
-            "active_trades": active_trades,
-            "win_rate": win_rate,
-            "total_trades": total_trades,
-            "max_drawdown": max_drawdown
-        }
-        return {"success": True, "data": metrics_data}
+        return PerformanceMetrics(
+            total_pnl=trading_system.total_pnl,
+            total_roi=trading_system.total_pnl / trading_system.global_config.total_capital,
+            daily_pnl=trading_system.daily_pnl,
+            active_trades=len(trading_system.active_trades),
+            win_rate=win_rate,
+            total_trades=total_trades,
+            max_drawdown=max_drawdown
+        )
     
     # Return demo data if system not running
-    metrics_data = {
-        "total_pnl": 0.0,
-        "total_roi": 0.0,
-        "daily_pnl": 0.0,
-        "active_trades": 0,
-        "win_rate": 0.0,
-        "total_trades": 0,
-        "max_drawdown": 0.0
-    }
-    return {"success": True, "data": metrics_data}
+    return PerformanceMetrics(
+        total_pnl=0.0,
+        total_roi=0.0,
+        daily_pnl=0.0,
+        active_trades=0,
+        win_rate=0.0,
+        total_trades=0,
+        max_drawdown=0.0
+    )
 
-@app.get("/api/bots")
+@app.get("/api/bots", response_model=Dict[str, List[BotStatus]])
 async def get_bot_status():
     """Get status of all trading bots."""
     global trading_system
     
-    bots = []
-    
     if trading_system:
-        # System is running - get live data
-        # bot_configs is a dictionary {bot_id: BotConfig}
-        for bot_id, config in trading_system.bot_configs.items():
-            # Calculate bot-specific PnL
+        bots = []
+        # bot_configs is a dict {bot_id: BotConfig} — must iterate .values()
+        for config in trading_system.bot_configs.values():
             bot_trades = [t for t in trading_system.trade_history if t.symbol == config.symbol]
-            bot_pnl = sum([t.pnl for t in bot_trades if t.pnl])
-            
-            bots.append({
-                "symbol": config.symbol,
-                "timeframe": config.timeframe,
-                "status": "running" if config.enabled else "paused",
-                "pnl": bot_pnl,
-                "trades": len(bot_trades),
-                "enabled": config.enabled
-            })
-    else:
-        # System is not running - get configured bots from config file
-        try:
-            config_data = config_manager.get_configuration_dict()
-            bot_configs = config_data.get("bot_configs", [])
-            
-            for i, bot_config in enumerate(bot_configs):
-                bots.append({
-                    "symbol": bot_config.get("symbol", ""),
-                    "timeframe": bot_config.get("timeframe", ""),
-                    "status": "stopped" if bot_config.get("enabled", False) else "disabled",
-                    "pnl": 0.0,  # No PnL data when system is stopped
-                    "trades": 0,  # No trade data when system is stopped
-                    "enabled": bot_config.get("enabled", False)
-                })
-        except Exception as e:
-            enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.API, f"Error loading bot configs: {e}")
-    
-    return {"success": True, "data": {"bots": bots}}
+            bot_pnl = sum(t.pnl for t in bot_trades if t.pnl is not None)
 
-@app.get("/api/trades/recent")
+            bots.append(BotStatus(
+                symbol=config.symbol,
+                timeframe=config.timeframe,
+                status="running" if config.enabled else "paused",
+                pnl=bot_pnl,
+                trades=len(bot_trades),
+                enabled=config.enabled
+            ))
+        
+        return {"bots": bots}
+    
+    # Return demo data
+    return {
+        "bots": [
+            BotStatus(symbol="LINK/USDT", timeframe="5m", status="running", pnl=156.78, trades=3, enabled=True),
+            BotStatus(symbol="LINK/USDT", timeframe="1m", status="running", pnl=89.45, trades=8, enabled=True),
+            BotStatus(symbol="ADA/USDT", timeframe="1m", status="running", pnl=234.12, trades=5, enabled=True),
+            BotStatus(symbol="ADA/USDT", timeframe="5m", status="paused", pnl=-45.67, trades=2, enabled=False)
+        ]
+    }
+
+@app.get("/api/trades/recent", response_model=Dict[str, List[TradeInfo]])
 async def get_recent_trades():
     """Get recent trades."""
     global trading_system
@@ -363,180 +224,52 @@ async def get_recent_trades():
         trades = []
         
         for trade in recent_trades:
-            # Safe timestamp handling
-            try:
-                if trade.entry_time and trade.entry_time > 0:
-                    # Check if timestamp is in milliseconds or seconds
-                    if trade.entry_time > 1e12:  # Milliseconds
-                        timestamp = trade.entry_time / 1000
-                    else:  # Seconds
-                        timestamp = trade.entry_time
-                    
-                    time_str = datetime.fromtimestamp(timestamp).strftime("%H:%M")
-                else:
-                    time_str = "N/A"
-            except (ValueError, OSError, OverflowError) as e:
-                time_str = "Invalid"
-                enhanced_logger.log_structured(LogLevel.WARNING, LogCategory.API, f"Invalid timestamp for trade {trade.id}: {trade.entry_time}")
-            
-            trades.append({
-                "symbol": trade.symbol,
-                "direction": "LONG" if trade.direction == 1 else "SHORT",
-                "pnl": trade.pnl or 0.0,
-                "status": trade.status,
-                "time": time_str,
-                "entry_price": trade.entry_price or 0.0,
-                "exit_price": trade.exit_price or 0.0
-            })
+            trades.append(TradeInfo(
+                symbol=trade.symbol,
+                direction="LONG" if trade.direction == 1 else "SHORT",
+                pnl=trade.pnl or 0.0,
+                status=trade.status,
+                time=datetime.fromtimestamp(trade.entry_time / 1000).strftime("%H:%M"),
+                entry_price=trade.entry_price,
+                exit_price=trade.exit_price
+            ))
         
-        return {"success": True, "data": {"trades": trades}}
+        return {"trades": trades}
     
-    # Return empty data when system is not running
-    return {"success": True, "data": {"trades": []}}
+    # Return demo data
+    return {
+        "trades": [
+            TradeInfo(symbol="LINK/USDT", direction="LONG", pnl=45.67, status="closed", time="10:30"),
+            TradeInfo(symbol="ADA/USDT", direction="SHORT", pnl=-23.45, status="closed", time="10:15"),
+            TradeInfo(symbol="LINK/USDT", direction="LONG", pnl=78.90, status="open", time="10:00"),
+            TradeInfo(symbol="ADA/USDT", direction="LONG", pnl=34.56, status="closed", time="09:45"),
+            TradeInfo(symbol="LINK/USDT", direction="SHORT", pnl=-12.34, status="closed", time="09:30")
+        ]
+    }
 
-@app.get("/api/equity")
+@app.get("/api/equity", response_model=Dict[str, List[EquityPoint]])
 async def get_equity_curve():
     """Get equity curve data."""
     global trading_system
     
     if trading_system and trading_system.equity_curve:
-        equity_points = []
-        for point in trading_system.equity_curve[-100:]:  # Last 100 points
-            try:
-                # Validate timestamp
-                timestamp = point.get('timestamp', 0)
-                equity = point.get('equity', 0.0)
-                
-                if timestamp and timestamp > 0:
-                    equity_points.append({
-                        "timestamp": timestamp,
-                        "equity": equity
-                    })
-            except (KeyError, TypeError, ValueError) as e:
-                enhanced_logger.log_structured(LogLevel.WARNING, LogCategory.API, f"Invalid equity point: {point}")
-                continue
-        
-        return {"success": True, "data": {"equity_curve": equity_points}}
+        equity_points = [
+            EquityPoint(timestamp=point['timestamp'], equity=point['equity'])
+            for point in trading_system.equity_curve[-100:]  # Last 100 points
+        ]
+        return {"equity_curve": equity_points}
     
-    # Return empty data when system is not running
-    return {"success": True, "data": {"equity_curve": []}}
-
-
-
-@app.put("/api/bots/{bot_id}/config")
-async def update_bot_config(bot_id: str, config: BotConfigUpdate):
-    """Update bot configuration."""
-    global trading_system
+    # Return demo data
+    now = datetime.now()
+    equity_points = []
+    equity = 10000.0
     
-    try:
-        add_system_log("INFO", f"Updating configuration for bot {bot_id}", "api")
-        
-        # For now, we'll store the config update and require system restart
-        # In a production system, you might want to update the running bot
-        
-        # TODO: Implement actual bot config update
-        # This would typically involve:
-        # 1. Validating the new configuration
-        # 2. Updating the bot's configuration in memory/database
-        # 3. Restarting the specific bot with new config
-        
-        add_system_log("SUCCESS", f"Bot {bot_id} configuration updated (restart required)", "api")
-        
-        return {
-            "message": "Bot configuration updated successfully",
-            "restart_required": True,
-            "config": {
-                "symbol": config.symbol,
-                "timeframe": config.timeframe,
-                "enabled": config.enabled,
-                "risk_per_trade": config.risk_per_trade,
-                "max_positions": config.max_positions,
-                "stop_loss": config.stop_loss,
-                "take_profit": config.take_profit
-            }
-        }
-        
-    except Exception as e:
-        add_system_log("ERROR", f"Failed to update bot {bot_id}: {str(e)}", "api")
-        raise HTTPException(status_code=500, detail=f"Failed to update bot configuration: {str(e)}")
-
-@app.post("/api/bots/{bot_id}/toggle")
-async def toggle_bot(bot_id: str, enabled: dict):
-    """Toggle bot enabled/disabled state."""
-    global trading_system
+    for i in range(50):
+        timestamp = int((now - timedelta(minutes=i*5)).timestamp() * 1000)
+        equity += (0.5 - __import__('random').random()) * 50
+        equity_points.append(EquityPoint(timestamp=timestamp, equity=max(equity, 9000)))
     
-    try:
-        is_enabled = enabled.get("enabled", False)
-        action = "enabled" if is_enabled else "disabled"
-        
-        add_system_log("INFO", f"Bot {bot_id} {action}", "api")
-        
-        # TODO: Implement actual bot toggle
-        # This would typically involve:
-        # 1. Finding the bot by ID
-        # 2. Updating its enabled state
-        # 3. Starting/stopping the bot accordingly
-        
-        return {
-            "message": f"Bot {action} successfully",
-            "bot_id": bot_id,
-            "enabled": is_enabled
-        }
-        
-    except Exception as e:
-        add_system_log("ERROR", f"Failed to toggle bot {bot_id}: {str(e)}", "api")
-        raise HTTPException(status_code=500, detail=f"Failed to toggle bot: {str(e)}")
-
-@app.post("/api/generate-test-trades")
-async def generate_test_trades():
-    """Generate some test trades for demonstration purposes."""
-    global trading_system
-    
-    try:
-        add_system_log("INFO", "Generating test trades for demonstration", "api")
-        
-        if not trading_system:
-            raise HTTPException(status_code=400, detail="Trading system not running")
-        
-        # Generate some mock trades
-        import random
-        from datetime import datetime, timedelta
-        
-        symbols = ['LINK/USDT', 'BTC/USDT', 'ETH/USDT']
-        
-        for i in range(5):  # Generate 5 test trades
-            symbol = random.choice(symbols)
-            direction = random.choice([1, -1])  # 1 for long, -1 for short
-            entry_price = random.uniform(100, 50000) if 'BTC' in symbol else random.uniform(1, 100)
-            exit_price = entry_price * (1 + random.uniform(-0.05, 0.05))  # ±5% change
-            pnl = (exit_price - entry_price) * direction * random.uniform(0.1, 1.0)
-            
-            # Create a mock trade object
-            trade = type('Trade', (), {
-                'symbol': symbol,
-                'direction': direction,
-                'entry_price': entry_price,
-                'exit_price': exit_price,
-                'pnl': pnl,
-                'status': random.choice(['completed', 'open', 'closed']),
-                'entry_time': int((datetime.now() - timedelta(hours=random.randint(1, 24))).timestamp() * 1000)
-            })()
-            
-            # Add to trading system's trade history
-            if not hasattr(trading_system, 'trade_history'):
-                trading_system.trade_history = []
-            trading_system.trade_history.append(trade)
-        
-        add_system_log("SUCCESS", f"Generated 5 test trades", "api")
-        
-        return {
-            "message": "Test trades generated successfully",
-            "trades_generated": 5
-        }
-        
-    except Exception as e:
-        add_system_log("ERROR", f"Failed to generate test trades: {str(e)}", "api")
-        raise HTTPException(status_code=500, detail=f"Failed to generate test trades: {str(e)}")
+    return {"equity_curve": list(reversed(equity_points))}
 
 @app.post("/api/start")
 async def start_system(background_tasks: BackgroundTasks):
@@ -547,23 +280,15 @@ async def start_system(background_tasks: BackgroundTasks):
         raise HTTPException(status_code=400, detail="System is already running")
     
     try:
-        add_system_log("INFO", "Starting trading system...", "api")
-        
-        # Create system configuration from file
-        global_config, bot_configs = load_config_from_file()
+        # Create system configuration
+        global_config, bot_configs = create_production_config()
         trading_system = ProductionTradingSystem(global_config, bot_configs)
-        
-        add_system_log("INFO", f"System initialized with {len(bot_configs)} bots", "system")
-        add_system_log("INFO", f"Paper trading: {global_config.paper_trading}", "system")
-        add_system_log("INFO", f"Total capital: ${global_config.total_capital:,.2f}", "system")
         
         # Start system in background
         system_task = asyncio.create_task(trading_system.start())
         
-        add_system_log("SUCCESS", "Trading system started successfully", "api")
-        return {"success": True, "message": "Trading system started successfully"}
+        return {"message": "Trading system started successfully"}
     except Exception as e:
-        add_system_log("ERROR", f"Failed to start system: {str(e)}", "api")
         raise HTTPException(status_code=500, detail=f"Failed to start system: {str(e)}")
 
 @app.post("/api/stop")
@@ -575,8 +300,6 @@ async def stop_system():
         raise HTTPException(status_code=400, detail="System is not running")
     
     try:
-        add_system_log("INFO", "Stopping trading system...", "api")
-        
         # Cancel the system task
         system_task.cancel()
         
@@ -584,10 +307,8 @@ async def stop_system():
         if trading_system:
             await trading_system._shutdown()
         
-        add_system_log("SUCCESS", "Trading system stopped successfully", "api")
-        return {"success": True, "message": "Trading system stopped successfully"}
+        return {"message": "Trading system stopped successfully"}
     except Exception as e:
-        add_system_log("ERROR", f"Failed to stop system: {str(e)}", "api")
         raise HTTPException(status_code=500, detail=f"Failed to stop system: {str(e)}")
 
 @app.post("/api/emergency-stop")
@@ -602,930 +323,289 @@ async def emergency_stop():
         if trading_system:
             await trading_system._emergency_shutdown()
         
-        return {"success": True, "message": "Emergency stop executed successfully"}
+        return {"message": "Emergency stop executed successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Emergency stop failed: {str(e)}")
 
+@app.get("/api/config")
+async def get_configuration():
+    """Return current system configuration so the form can be pre-populated."""
+    # Try to load saved config file first, then fall back to running system
+    if os.path.exists("system_config.json"):
+        try:
+            with open("system_config.json", "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+
+    if trading_system:
+        return {
+            "trading_mode": "paper" if trading_system.global_config.paper_trading else "live",
+            "total_capital": trading_system.global_config.total_capital,
+            "daily_loss_limit": trading_system.global_config.daily_loss_limit * 100,
+            "daily_profit_target": trading_system.global_config.daily_profit_target * 100,
+        }
+
+    return {
+        "trading_mode": "paper",
+        "total_capital": 1200.0,
+        "daily_loss_limit": 4.0,
+        "daily_profit_target": 2.5,
+    }
+
+
+@app.get("/api/daily-stats")
+async def get_daily_stats():
+    """Return daily PnL history for the dashboard."""
+    # Try DB-backed stats first
+    try:
+        from backend.persistence.repository import DailyStatsRepository
+        repo = DailyStatsRepository()
+        return {"daily_stats": repo.get_history(limit=30)}
+    except Exception:
+        pass
+
+    if trading_system and trading_system.daily_stats:
+        return {"daily_stats": trading_system.daily_stats[-30:]}
+
+    return {"daily_stats": []}
+
+
 @app.post("/api/config")
-async def update_configuration(config: dict):
-    """Update system configuration including bot configs."""
+async def update_configuration(config: ConfigUpdate):
+    """Update system configuration."""
     global trading_system
     
     try:
-        # Load current configuration
-        config_file = "trading_config.json"
-        if os.path.exists(config_file):
-            with open(config_file, "r") as f:
-                current_config = json.load(f)
-        else:
-            current_config = {"global_config": {}, "bot_configs": []}
-        
-        # Update global configuration
-        if "trading_mode" in config:
-            current_config["global_config"]["paper_trading"] = config["trading_mode"] == "paper"
-        if "total_capital" in config:
-            current_config["global_config"]["total_capital"] = config["total_capital"]
-        if "daily_loss_limit" in config:
-            current_config["global_config"]["daily_loss_limit"] = config["daily_loss_limit"]
-        if "daily_profit_target" in config:
-            current_config["global_config"]["daily_profit_target"] = config["daily_profit_target"]
-        if "max_concurrent_trades" in config:
-            current_config["global_config"]["max_concurrent_trades"] = config["max_concurrent_trades"]
-        if "emergency_stop_drawdown" in config:
-            current_config["global_config"]["emergency_stop_drawdown"] = config["emergency_stop_drawdown"]
-        
-        # Update bot configurations if provided
-        if "bot_configs" in config:
-            # Validate maximum of 5 bots
-            if len(config["bot_configs"]) > 5:
-                raise HTTPException(status_code=400, detail="Maximum of 5 bots allowed")
-            
-            # Validate each bot configuration
-            for bot_config in config["bot_configs"]:
-                if not all(key in bot_config for key in ["symbol", "timeframe"]):
-                    raise HTTPException(status_code=400, detail="Bot configuration must include symbol and timeframe")
-            
-            current_config["bot_configs"] = config["bot_configs"]
-        
-        # Add metadata
-        current_config["last_updated"] = datetime.now().isoformat()
-        current_config["updated_by"] = "API User"
-        current_config["update_reason"] = "Configuration updated via API"
+        if trading_system:
+            # Update global configuration
+            trading_system.global_config.total_capital = config.total_capital
+            trading_system.global_config.daily_loss_limit = config.daily_loss_limit
+            trading_system.global_config.daily_profit_target = config.daily_profit_target
+            trading_system.global_config.paper_trading = config.trading_mode == "paper"
         
         # Save configuration to file
-        with open(config_file, "w") as f:
-            json.dump(current_config, f, indent=2)
+        config_data = {
+            "trading_mode": config.trading_mode,
+            "total_capital": config.total_capital,
+            "daily_loss_limit": config.daily_loss_limit,
+            "daily_profit_target": config.daily_profit_target,
+            "updated_at": datetime.now().isoformat()
+        }
         
-        # Update running system if available
-        if trading_system:
-            if "trading_mode" in config:
-                trading_system.global_config.paper_trading = config["trading_mode"] == "paper"
-            if "total_capital" in config:
-                trading_system.global_config.total_capital = config["total_capital"]
-            if "daily_loss_limit" in config:
-                trading_system.global_config.daily_loss_limit = config["daily_loss_limit"]
-            if "daily_profit_target" in config:
-                trading_system.global_config.daily_profit_target = config["daily_profit_target"]
+        with open("system_config.json", "w") as f:
+            json.dump(config_data, f, indent=2)
         
-        add_system_log("SUCCESS", "Configuration updated successfully", "api")
-        return {"message": "Configuration updated successfully", "success": True}
-        
-    except HTTPException:
-        raise
+        return {"message": "Configuration updated successfully"}
     except Exception as e:
-        add_system_log("ERROR", f"Failed to update configuration: {str(e)}", "api")
         raise HTTPException(status_code=500, detail=f"Failed to update configuration: {str(e)}")
 
 @app.get("/api/logs")
 async def get_system_logs():
     """Get recent system logs."""
     try:
-        # Return in-memory logs first
-        if system_logs:
-            return {"success": True, "data": {"logs": system_logs}}
-        
-        # Fallback to file logs if no in-memory logs
         if os.path.exists("trading_system.log"):
             with open("trading_system.log", "r") as f:
                 lines = f.readlines()
-                # Return last 50 lines
-                recent_logs = lines[-50:] if len(lines) > 50 else lines
-                
-                # Parse logs into structured format
-                parsed_logs = []
-                for line in recent_logs:
-                    line = line.strip()
-                    if line:
-                        # Try to parse format: "YYYY-MM-DD HH:MM:SS,mmm - name - LEVEL - MESSAGE"
-                        if ' - ' in line:
-                            parts = line.split(' - ')
-                            if len(parts) >= 3:
-                                timestamp_part = parts[0]
-                                name_part = parts[1]
-                                level_part = parts[2]
-                                message_part = ' - '.join(parts[3:]) if len(parts) > 3 else level_part
-                                
-                                # Extract just the time part
-                                if ',' in timestamp_part:
-                                    timestamp = timestamp_part.split(',')[0]
-                                else:
-                                    timestamp = timestamp_part
-                                
-                                # Determine level
-                                if 'INFO' in level_part:
-                                    level = "INFO"
-                                elif 'WARNING' in level_part:
-                                    level = "WARNING"
-                                elif 'ERROR' in level_part:
-                                    level = "ERROR"
-                                else:
-                                    level = "INFO"
-                                
-                                parsed_logs.append({
-                                    "timestamp": timestamp,
-                                    "level": level,
-                                    "message": message_part,
-                                    "source": name_part
-                                })
-                
-                return {"success": True, "data": {"logs": parsed_logs}}
+                # Return last 100 lines
+                recent_logs = lines[-100:] if len(lines) > 100 else lines
+                return {"logs": [line.strip() for line in recent_logs]}
         
-        # Return empty logs if no file exists
-        return {"success": True, "data": {"logs": []}}
+        return {"logs": ["No logs available"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read logs: {str(e)}")
 
 @app.get("/api/health")
 async def health_check():
-    """Enhanced health check endpoint with system metrics."""
-    import psutil
-    import os
-    
-    try:
-        # Get system metrics
-        memory_info = psutil.virtual_memory()
-        cpu_percent = psutil.cpu_percent(interval=1)
-        disk_usage = psutil.disk_usage('/')
-        
-        # Check if trading system is running
-        trading_system_running = system_task is not None and not system_task.done()
-        
-        # Calculate health score
-        health_score = 100
-        warnings = []
-        
-        # Memory check
-        if memory_info.percent > 85:
-            health_score -= 30
-            warnings.append(f"High memory usage: {memory_info.percent:.1f}%")
-        elif memory_info.percent > 70:
-            health_score -= 15
-            warnings.append(f"Moderate memory usage: {memory_info.percent:.1f}%")
-        
-        # CPU check
-        if cpu_percent > 90:
-            health_score -= 20
-            warnings.append(f"High CPU usage: {cpu_percent:.1f}%")
-        elif cpu_percent > 75:
-            health_score -= 10
-            warnings.append(f"Moderate CPU usage: {cpu_percent:.1f}%")
-        
-        # Disk check
-        if disk_usage.percent > 90:
-            health_score -= 25
-            warnings.append(f"High disk usage: {disk_usage.percent:.1f}%")
-        
-        # Trading system check
-        if not trading_system_running:
-            health_score -= 40
-            warnings.append("Trading system is not running")
-        
-        # Determine status
-        if health_score >= 80:
-            status = "healthy"
-        elif health_score >= 60:
-            status = "degraded"
-        else:
-            status = "unhealthy"
-        
-        return {
-            "status": status,
-            "health_score": health_score,
-            "timestamp": datetime.now().isoformat(),
-            "version": "2.0.0",
-            "system_metrics": {
-                "memory_percent": memory_info.percent,
-                "memory_available_mb": memory_info.available // (1024 * 1024),
-                "cpu_percent": cpu_percent,
-                "disk_percent": disk_usage.percent,
-                "trading_system_running": trading_system_running,
-                "active_logs": len(system_logs)
-            },
-            "warnings": warnings
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "health_score": 0,
-            "timestamp": datetime.now().isoformat(),
-            "version": "2.0.0",
-            "error": str(e)
-        }
-
-@app.get("/api/performance-metrics")
-async def get_performance_metrics():
-    """Get detailed performance metrics for monitoring."""
-    import psutil
-    import gc
-    
-    try:
-        # System metrics
-        memory_info = psutil.virtual_memory()
-        cpu_percent = psutil.cpu_percent(interval=0.1)
-        
-        # Python memory metrics
-        gc_stats = gc.get_stats()
-        
-        # Application metrics
-        logs_count = len(system_logs)
-        
-        # Trading system metrics (if available)
-        trading_metrics = {}
-        if system_task and not system_task.done():
-            trading_metrics = {
-                "system_running": True,
-                "task_status": "running"
-            }
-        else:
-            trading_metrics = {
-                "system_running": False,
-                "task_status": "stopped"
-            }
-        
-        return {
-            "success": True,
-            "data": {
-                "timestamp": datetime.now().isoformat(),
-                "system_metrics": {
-                    "memory_percent": memory_info.percent,
-                    "memory_used_mb": (memory_info.total - memory_info.available) // (1024 * 1024),
-                    "memory_available_mb": memory_info.available // (1024 * 1024),
-                    "cpu_percent": cpu_percent,
-                    "gc_collections": sum(stat['collections'] for stat in gc_stats),
-                    "gc_collected": sum(stat['collected'] for stat in gc_stats),
-                    "gc_uncollectable": sum(stat['uncollectable'] for stat in gc_stats)
-                },
-                "application_metrics": {
-                    "active_logs": logs_count,
-                    "max_logs": 50,
-                    "logs_utilization": (logs_count / 50) * 100
-                },
-                "trading_metrics": trading_metrics
-            }
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-@app.get("/api/signal-quality")
-async def get_signal_quality():
-    """Retorna dados de qualidade dos sinais."""
-    # Simulação - em produção, obter do sistema real
+    """Health check endpoint."""
     return {
-        "current_quality_score": 0.72,
-        "signals_evaluated": 45,
-        "signals_passed": 12,
-        "signals_rejected": 33,
-        "avg_quality_score": 0.68,
-        "pass_rate": 0.27,
-        "layer_scores": {
-            "technical": 0.75,
-            "market_structure": 0.68,
-            "binance_sentiment": 0.82,
-            "ml_confidence": 0.71
-        },
-        "recent_rejections": [
-            {
-                "symbol": "BTC/USDT",
-                "quality_score": 0.58,
-                "timestamp": datetime.now().isoformat(),
-                "reasons": ["Confiança ML insuficiente"]
-            },
-            {
-                "symbol": "ETH/USDT", 
-                "quality_score": 0.61,
-                "timestamp": (datetime.now() - timedelta(minutes=5)).isoformat(),
-                "reasons": ["Estrutura de mercado inadequada"]
-            }
-        ]
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0"
     }
 
-@app.get("/api/market-sentiment/{symbol}")
-async def get_market_sentiment(symbol: str):
-    """Retorna análise de sentiment para um símbolo."""
-    # Simulação - em produção, usar BinanceAdvancedData real
-    import random
-    
-    sentiment_score = random.uniform(0.3, 0.8)
-    sentiment_label = 'bullish' if sentiment_score > 0.6 else 'bearish' if sentiment_score < 0.4 else 'neutral'
-    
-    return {
-        "sentiment_score": sentiment_score,
-        "sentiment_label": sentiment_label,
-        "confidence": random.uniform(0.7, 1.0),
-        "factors": [
-            "Funding rate neutro",
-            "Open Interest crescente" if random.random() > 0.5 else "Open Interest estável",
-            "Pressão compradora forte" if sentiment_score > 0.6 else "Pressão vendedora forte"
-        ],
-        "raw_data": {
-            "funding_rate": random.uniform(-0.001, 0.001),
-            "open_interest": {
-                "current_oi": random.uniform(50000, 100000),
-                "trend": random.choice(["increasing", "stable", "decreasing"]),
-                "change_pct": random.uniform(-5, 5)
-            },
-            "long_short_ratio": {
-                "current_ratio": random.uniform(0.8, 1.5),
-                "sentiment": random.choice(["bullish", "neutral", "bearish"])
-            },
-            "taker_data": {
-                "buy_sell_ratio": random.uniform(0.8, 1.4),
-                "trend": random.choice(["buying_pressure", "selling_pressure", "balanced"])
-            },
-            "order_book": {
-                "spread_pct": random.uniform(0.001, 0.01),
-                "sentiment": sentiment_label,
-                "imbalance": random.uniform(0.4, 0.6)
-            }
-        }
-    }
+# ── Bot management endpoints ────────────────────────────────────────────────
 
-@app.get("/api/market-regime/{symbol}")
-async def get_market_regime_analysis(symbol: str):
-    """Retorna análise completa de regime para um símbolo."""
-    # Simulação - em produção, usar sistema real
-    import random
-    
-    regimes = ['trending_bull', 'trending_bear', 'ranging', 'high_volatility', 'transitional']
-    regime = random.choice(regimes)
-    confidence = random.uniform(0.6, 1.0)
-    
-    # Configuração de estratégia baseada no regime
-    strategy_configs = {
-        'trending_bull': {
-            'strategy_type': 'trend_following',
-            'max_trades_per_day': 3,
-            'quality_threshold': 0.65,
-            'risk_per_trade': 0.008
-        },
-        'trending_bear': {
-            'strategy_type': 'trend_following_short',
-            'max_trades_per_day': 2,
-            'quality_threshold': 0.70,
-            'risk_per_trade': 0.006
-        },
-        'ranging': {
-            'strategy_type': 'mean_reversion',
-            'max_trades_per_day': 4,
-            'quality_threshold': 0.75,
-            'risk_per_trade': 0.005
-        },
-        'high_volatility': {
-            'strategy_type': 'volatility_breakout',
-            'max_trades_per_day': 1,
-            'quality_threshold': 0.85,
-            'risk_per_trade': 0.003
-        },
-        'transitional': {
-            'strategy_type': 'conservative',
-            'max_trades_per_day': 1,
-            'quality_threshold': 0.80,
-            'risk_per_trade': 0.004
-        }
-    }
-    
-    return {
-        'regime': regime,
-        'confidence': confidence,
-        'trend_strength': random.uniform(0.2, 0.9),
-        'volatility_level': random.uniform(0.1, 0.8),
-        'volume_profile': random.choice(['low', 'normal', 'high']),
-        'breakout_frequency': random.uniform(0.1, 0.7),
-        'regime_duration': random.randint(1, 15),
-        'factors': [
-            f"Tendência {'forte' if random.random() > 0.5 else 'fraca'}",
-            f"Volume {'alto' if random.random() > 0.5 else 'normal'}",
-            f"Volatilidade {'alta' if random.random() > 0.5 else 'baixa'}"
-        ],
-        'strategy_config': strategy_configs.get(regime, strategy_configs['transitional'])
-    }
-
-# ============================================================================
-# ENHANCED CONFIGURATION MANAGEMENT ENDPOINTS
-# ============================================================================
-
-@app.get("/api/config/full")
-async def get_full_configuration():
-    """Get complete system configuration."""
-    try:
-        config_data = config_manager.get_configuration_dict()
-        enhanced_logger.log_api_request("/api/config/full", "GET")
-        return {"success": True, "data": config_data}
-    except Exception as e:
-        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.API, f"Error getting full config: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.put("/api/config/global")
-async def update_global_configuration(config: GlobalConfigUpdate):
-    """Update global configuration parameters."""
-    try:
-        updates = {k: v for k, v in config.dict().items() if v is not None}
-        success = config_manager.update_global_config(updates, "API User")
-        
-        if success:
-            enhanced_logger.log_config_change("global_update", updates, "API User")
-            return {"message": "Global configuration updated successfully", "updates": updates}
-        else:
-            raise HTTPException(status_code=400, detail="Failed to update global configuration")
-    except Exception as e:
-        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.CONFIG, f"Error updating global config: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.put("/api/config/bot/{bot_id}")
-async def update_bot_configuration(bot_id: str, config: BotConfigUpdate):
-    """Update specific bot configuration."""
-    try:
-        updates = {k: v for k, v in config.dict().items() if v is not None}
-        success = config_manager.update_bot_config(bot_id, updates, "API User")
-        
-        if success:
-            enhanced_logger.log_config_change("bot_update", {"bot_id": bot_id, **updates}, "API User")
-            return {"message": f"Bot {bot_id} configuration updated successfully", "updates": updates}
-        else:
-            raise HTTPException(status_code=400, detail=f"Failed to update bot {bot_id} configuration")
-    except Exception as e:
-        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.CONFIG, f"Error updating bot config {bot_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/config/bot")
-async def add_bot_configuration(config: NewBotConfig):
-    """Add new bot configuration."""
-    try:
-        bot_config = BotConfig(**config.dict())
-        success = config_manager.add_bot_config(bot_config, "API User")
-        
-        if success:
-            bot_id = f"{config.symbol}_{config.timeframe}"
-            enhanced_logger.log_config_change("bot_add", config.dict(), "API User")
-            return {"message": f"Bot {bot_id} added successfully"}
-        else:
-            raise HTTPException(status_code=400, detail="Failed to add bot configuration")
-    except Exception as e:
-        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.CONFIG, f"Error adding bot config: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.delete("/api/config/bot/{bot_id}")
-async def remove_bot_configuration(bot_id: str):
-    """Remove bot configuration."""
-    try:
-        success = config_manager.remove_bot_config(bot_id, "API User")
-        
-        if success:
-            enhanced_logger.log_config_change("bot_remove", {"bot_id": bot_id}, "API User")
-            return {"message": f"Bot {bot_id} removed successfully"}
-        else:
-            raise HTTPException(status_code=404, detail=f"Bot {bot_id} not found")
-    except Exception as e:
-        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.CONFIG, f"Error removing bot config {bot_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/config/backups")
-async def get_configuration_backups():
-    """Get list of available configuration backups."""
-    try:
-        backups = config_manager.get_available_backups()
-        return {"backups": backups}
-    except Exception as e:
-        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.API, f"Error getting backups: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/config/restore/{backup_filename}")
-async def restore_configuration_backup(backup_filename: str):
-    """Restore configuration from backup."""
-    try:
-        success = config_manager.restore_backup(backup_filename, "API User")
-        
-        if success:
-            enhanced_logger.log_config_change("backup_restore", {"backup_file": backup_filename}, "API User")
-            return {"message": f"Configuration restored from {backup_filename}"}
-        else:
-            raise HTTPException(status_code=400, detail="Failed to restore backup")
-    except Exception as e:
-        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.CONFIG, f"Error restoring backup: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# ============================================================================
-# ENHANCED LOGGING ENDPOINTS
-# ============================================================================
-
-@app.get("/api/logs/enhanced")
-async def get_enhanced_logs(
-    start_date: Optional[str] = Query(None, description="Start date (ISO format)"),
-    end_date: Optional[str] = Query(None, description="End date (ISO format)"),
-    level: Optional[str] = Query(None, description="Log level filter"),
-    category: Optional[str] = Query(None, description="Log category filter"),
-    bot_id: Optional[str] = Query(None, description="Bot ID filter"),
-    symbol: Optional[str] = Query(None, description="Symbol filter"),
-    limit: int = Query(1000, description="Maximum number of logs to return")
-):
-    """Get filtered enhanced logs."""
-    try:
-        # Parse dates
-        start_dt = datetime.fromisoformat(start_date) if start_date else None
-        end_dt = datetime.fromisoformat(end_date) if end_date else None
-        
-        # Parse enums
-        level_enum = LogLevel(level) if level else None
-        category_enum = LogCategory(category) if category else None
-        
-        logs = enhanced_logger.get_logs(
-            start_date=start_dt,
-            end_date=end_dt,
-            level=level_enum,
-            category=category_enum,
-            bot_id=bot_id,
-            symbol=symbol,
-            limit=limit
-        )
-        
-        # Convert to dict for JSON response
-        log_dicts = [
-            {
-                "timestamp": log.timestamp,
-                "level": log.level,
-                "category": log.category,
-                "message": log.message,
-                "data": log.data,
-                "bot_id": log.bot_id,
-                "symbol": log.symbol,
-                "trade_id": log.trade_id
-            }
-            for log in logs
-        ]
-        
-        enhanced_logger.log_api_request("/api/logs/enhanced", "GET", {
-            "filters": {
-                "start_date": start_date,
-                "end_date": end_date,
-                "level": level,
-                "category": category,
-                "bot_id": bot_id,
-                "symbol": symbol,
-                "limit": limit
-            },
-            "result_count": len(log_dicts)
-        })
-        
-        return {
-            "logs": log_dicts,
-            "total_count": len(log_dicts),
-            "filters_applied": {
-                "start_date": start_date,
-                "end_date": end_date,
-                "level": level,
-                "category": category,
-                "bot_id": bot_id,
-                "symbol": symbol,
-                "limit": limit
-            }
-        }
-        
-    except Exception as e:
-        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.API, f"Error getting enhanced logs: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/logs/export")
-async def export_logs(
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    format: str = "json"
-):
-    """Export logs to file."""
-    try:
-        # Parse dates
-        start_dt = datetime.fromisoformat(start_date) if start_date else None
-        end_dt = datetime.fromisoformat(end_date) if end_date else None
-        
-        # Export logs
-        export_path = enhanced_logger.export_logs(
-            start_date=start_dt,
-            end_date=end_dt,
-            format=format
-        )
-        
-        enhanced_logger.log_structured(LogLevel.INFO, LogCategory.API, 
-                                     f"Logs exported to {export_path}",
-                                     data={"format": format, "start_date": start_date, "end_date": end_date})
-        
-        # Return file for download
-        return FileResponse(
-            path=export_path,
-            filename=Path(export_path).name,
-            media_type='application/octet-stream'
-        )
-        
-    except Exception as e:
-        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.API, f"Error exporting logs: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/logs/statistics")
-async def get_log_statistics():
-    """Get logging statistics."""
-    try:
-        stats = enhanced_logger.get_log_statistics()
-        return stats
-    except Exception as e:
-        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.API, f"Error getting log statistics: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/logs/categories")
-async def get_log_categories():
-    """Get available log categories and levels."""
-    return {
-        "levels": [level.value for level in LogLevel],
-        "categories": [category.value for category in LogCategory]
-    }
-
-# ============================================================================
-# BOT MANAGEMENT ENDPOINTS
-# ============================================================================
+AVAILABLE_SYMBOLS = ["LINK/USDT", "BTC/USDT", "ETH/USDT", "ADA/USDT", "SOL/USDT", "BNB/USDT", "DOGE/USDT"]
+AVAILABLE_TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
 
 @app.get("/api/bots/available-symbols")
 async def get_available_symbols():
-    """Get list of available trading symbols."""
-    # Popular cryptocurrency pairs
-    symbols = [
-        "BTC/USDT", "ETH/USDT", "BNB/USDT", "ADA/USDT", "XRP/USDT",
-        "SOL/USDT", "DOT/USDT", "LINK/USDT", "MATIC/USDT", "AVAX/USDT",
-        "UNI/USDT", "LTC/USDT", "ATOM/USDT", "ALGO/USDT", "VET/USDT",
-        "FTM/USDT", "NEAR/USDT", "SAND/USDT", "MANA/USDT", "CRV/USDT"
-    ]
-    return {"success": True, "data": {"symbols": symbols}}
+    return {"symbols": AVAILABLE_SYMBOLS}
 
 @app.get("/api/bots/available-timeframes")
 async def get_available_timeframes():
-    """Get list of available timeframes."""
-    timeframes = [
-        {"value": "1m", "label": "1 Minute"},
-        {"value": "5m", "label": "5 Minutes"},
-        {"value": "15m", "label": "15 Minutes"},
-        {"value": "30m", "label": "30 Minutes"},
-        {"value": "1h", "label": "1 Hour"},
-        {"value": "4h", "label": "4 Hours"},
-        {"value": "1d", "label": "1 Day"}
-    ]
-    return {"success": True, "data": {"timeframes": timeframes}}
-
-@app.post("/api/bots/add")
-async def add_bot_configuration(bot_config: NewBotConfig):
-    """Add a new bot configuration."""
-    try:
-        # Load current configuration
-        config_file = "trading_config.json"
-        if os.path.exists(config_file):
-            with open(config_file, "r") as f:
-                current_config = json.load(f)
-        else:
-            current_config = {"global_config": {}, "bot_configs": []}
-        
-        # Check if we already have 5 bots
-        if len(current_config.get("bot_configs", [])) >= 5:
-            raise HTTPException(status_code=400, detail="Maximum of 5 bots allowed")
-        
-        # Check for duplicate symbol/timeframe combination
-        existing_combinations = [(bot["symbol"], bot["timeframe"]) for bot in current_config.get("bot_configs", [])]
-        if (bot_config.symbol, bot_config.timeframe) in existing_combinations:
-            raise HTTPException(status_code=400, detail=f"Bot with {bot_config.symbol} on {bot_config.timeframe} already exists")
-        
-        # Add new bot configuration
-        new_bot = {
-            "symbol": bot_config.symbol,
-            "timeframe": bot_config.timeframe,
-            "capital_allocation": bot_config.capital_allocation,
-            "max_risk_per_trade": bot_config.max_risk_per_trade,
-            "confidence_threshold": bot_config.confidence_threshold,
-            "stop_loss_pct": bot_config.stop_loss_pct,
-            "take_profit_pct": bot_config.take_profit_pct,
-            "enabled": bot_config.enabled
-        }
-        
-        current_config.setdefault("bot_configs", []).append(new_bot)
-        
-        # Update metadata
-        current_config["last_updated"] = datetime.now().isoformat()
-        current_config["updated_by"] = "API User"
-        current_config["update_reason"] = f"Added new bot: {bot_config.symbol} {bot_config.timeframe}"
-        
-        # Save configuration
-        with open(config_file, "w") as f:
-            json.dump(current_config, f, indent=2)
-        
-        add_system_log("SUCCESS", f"Added new bot: {bot_config.symbol} {bot_config.timeframe}", "api")
-        return {
-            "message": f"Bot {bot_config.symbol} {bot_config.timeframe} added successfully",
-            "success": True,
-            "bot_config": new_bot
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        add_system_log("ERROR", f"Failed to add bot: {str(e)}", "api")
-        raise HTTPException(status_code=500, detail=f"Failed to add bot: {str(e)}")
-
-@app.put("/api/bots/update/{bot_index}")
-async def update_bot_configuration(bot_index: int, bot_config: dict):
-    """Update an existing bot configuration."""
-    try:
-        # Load current configuration
-        config_file = "trading_config.json"
-        if not os.path.exists(config_file):
-            raise HTTPException(status_code=404, detail="Configuration file not found")
-        
-        with open(config_file, "r") as f:
-            current_config = json.load(f)
-        
-        bot_configs = current_config.get("bot_configs", [])
-        
-        if bot_index < 0 or bot_index >= len(bot_configs):
-            raise HTTPException(status_code=404, detail="Bot not found")
-        
-        # Update bot configuration
-        old_bot = bot_configs[bot_index].copy()
-        for key, value in bot_config.items():
-            if key in ["symbol", "timeframe", "capital_allocation", "max_risk_per_trade", 
-                      "confidence_threshold", "stop_loss_pct", "take_profit_pct", "enabled"]:
-                bot_configs[bot_index][key] = value
-        
-        # Check for duplicate symbol/timeframe combination (excluding current bot)
-        if "symbol" in bot_config or "timeframe" in bot_config:
-            new_symbol = bot_configs[bot_index]["symbol"]
-            new_timeframe = bot_configs[bot_index]["timeframe"]
-            
-            for i, bot in enumerate(bot_configs):
-                if i != bot_index and bot["symbol"] == new_symbol and bot["timeframe"] == new_timeframe:
-                    raise HTTPException(status_code=400, detail=f"Bot with {new_symbol} on {new_timeframe} already exists")
-        
-        # Update metadata
-        current_config["last_updated"] = datetime.now().isoformat()
-        current_config["updated_by"] = "API User"
-        current_config["update_reason"] = f"Updated bot: {bot_configs[bot_index]['symbol']} {bot_configs[bot_index]['timeframe']}"
-        
-        # Save configuration
-        with open(config_file, "w") as f:
-            json.dump(current_config, f, indent=2)
-        
-        add_system_log("SUCCESS", f"Updated bot: {bot_configs[bot_index]['symbol']} {bot_configs[bot_index]['timeframe']}", "api")
-        return {
-            "message": f"Bot updated successfully",
-            "success": True,
-            "bot_config": bot_configs[bot_index]
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        add_system_log("ERROR", f"Failed to update bot: {str(e)}", "api")
-        raise HTTPException(status_code=500, detail=f"Failed to update bot: {str(e)}")
-
-@app.delete("/api/bots/remove/{bot_index}")
-async def remove_bot_configuration(bot_index: int):
-    """Remove a bot configuration."""
-    try:
-        # Load current configuration
-        config_file = "trading_config.json"
-        if not os.path.exists(config_file):
-            raise HTTPException(status_code=404, detail="Configuration file not found")
-        
-        with open(config_file, "r") as f:
-            current_config = json.load(f)
-        
-        bot_configs = current_config.get("bot_configs", [])
-        
-        if bot_index < 0 or bot_index >= len(bot_configs):
-            raise HTTPException(status_code=404, detail="Bot not found")
-        
-        # Remove bot configuration
-        removed_bot = bot_configs.pop(bot_index)
-        
-        # Update metadata
-        current_config["last_updated"] = datetime.now().isoformat()
-        current_config["updated_by"] = "API User"
-        current_config["update_reason"] = f"Removed bot: {removed_bot['symbol']} {removed_bot['timeframe']}"
-        
-        # Save configuration
-        with open(config_file, "w") as f:
-            json.dump(current_config, f, indent=2)
-        
-        add_system_log("SUCCESS", f"Removed bot: {removed_bot['symbol']} {removed_bot['timeframe']}", "api")
-        return {
-            "message": f"Bot {removed_bot['symbol']} {removed_bot['timeframe']} removed successfully",
-            "success": True,
-            "removed_bot": removed_bot
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        add_system_log("ERROR", f"Failed to remove bot: {str(e)}", "api")
-        raise HTTPException(status_code=500, detail=f"Failed to remove bot: {str(e)}")
+    return {"timeframes": AVAILABLE_TIMEFRAMES}
 
 @app.get("/api/bots/count")
 async def get_bot_count():
-    """Get current number of configured bots."""
-    try:
-        config_file = "trading_config.json"
-        if os.path.exists(config_file):
-            with open(config_file, "r") as f:
-                current_config = json.load(f)
-            bot_count = len(current_config.get("bot_configs", []))
-        else:
-            bot_count = 0
-        
-        return {"success": True, "data": {
-            "current_count": bot_count,
-            "maximum_allowed": 5,
-            "can_add_more": bot_count < 5
-        }}
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get bot count: {str(e)}")
+    count = len(trading_system.bot_configs) if trading_system else 0
+    return {"count": count}
+
+@app.get("/api/bots/{bot_id:path}/config")
+async def get_bot_config(bot_id: str):
+    if not trading_system:
+        raise HTTPException(status_code=503, detail="Trading system not running")
+    config = trading_system.bot_configs.get(bot_id)
+    if not config:
+        raise HTTPException(status_code=404, detail=f"Bot '{bot_id}' not found")
+    from dataclasses import asdict
+    return asdict(config)
+
+@app.post("/api/bots/{bot_id:path}/toggle")
+async def toggle_bot(bot_id: str, body: dict = None):
+    if not trading_system:
+        raise HTTPException(status_code=503, detail="Trading system not running")
+    config = trading_system.bot_configs.get(bot_id)
+    if not config:
+        raise HTTPException(status_code=404, detail=f"Bot '{bot_id}' not found")
+    # Use explicit value if provided, else flip
+    if body and "enabled" in body:
+        config.enabled = bool(body["enabled"])
+    else:
+        config.enabled = not config.enabled
+    return {"bot_id": bot_id, "enabled": config.enabled}
+
+@app.post("/api/bots/add")
+async def add_bot(new_bot: NewBotConfig):
+    global trading_system
+    if not trading_system:
+        raise HTTPException(status_code=503, detail="Trading system not running")
+    bot_id = f"{new_bot.symbol}_{new_bot.timeframe}"
+    if bot_id in trading_system.bot_configs:
+        raise HTTPException(status_code=409, detail=f"Bot '{bot_id}' already exists")
+    from production_trading_system import BotConfig, OptimizedSignalGenerator
+    config = BotConfig(
+        symbol=new_bot.symbol, timeframe=new_bot.timeframe,
+        capital_allocation=new_bot.capital_allocation,
+        max_risk_per_trade=new_bot.max_risk_per_trade,
+        confidence_threshold=new_bot.confidence_threshold,
+        stop_loss_pct=new_bot.stop_loss_pct,
+        take_profit_pct=new_bot.take_profit_pct,
+        enabled=new_bot.enabled,
+    )
+    trading_system.bot_configs[bot_id] = config
+    trading_system.signal_generators[bot_id] = OptimizedSignalGenerator(new_bot.symbol, new_bot.timeframe)
+    return {"message": f"Bot '{bot_id}' added", "bot_id": bot_id}
+
+@app.put("/api/bots/update/{bot_index}")
+async def update_bot(bot_index: int, update: BotConfigUpdate):
+    if not trading_system:
+        raise HTTPException(status_code=503, detail="Trading system not running")
+    bots = list(trading_system.bot_configs.items())
+    if bot_index < 0 or bot_index >= len(bots):
+        raise HTTPException(status_code=404, detail=f"Bot index {bot_index} out of range")
+    bot_id, config = bots[bot_index]
+    for field, value in update.model_dump(exclude_none=True).items():
+        setattr(config, field, value)
+    return {"message": f"Bot '{bot_id}' updated"}
+
+@app.delete("/api/bots/remove/{bot_index}")
+async def remove_bot(bot_index: int):
+    if not trading_system:
+        raise HTTPException(status_code=503, detail="Trading system not running")
+    bots = list(trading_system.bot_configs.keys())
+    if bot_index < 0 or bot_index >= len(bots):
+        raise HTTPException(status_code=404, detail=f"Bot index {bot_index} out of range")
+    bot_id = bots[bot_index]
+    del trading_system.bot_configs[bot_id]
+    trading_system.signal_generators.pop(bot_id, None)
+    return {"message": f"Bot '{bot_id}' removed"}
+
+# ── Additional config and metrics endpoints ──────────────────────────────────
+
+@app.get("/api/config/full")
+async def get_full_config():
+    """Return complete system configuration (global + all bots)."""
+    if trading_system:
+        from dataclasses import asdict
+        return {
+            "global_config": asdict(trading_system.global_config),
+            "bot_configs": [
+                {"bot_id": bid, **asdict(cfg)}
+                for bid, cfg in trading_system.bot_configs.items()
+            ],
+        }
+    # Defaults when system not running
+    _, bot_cfgs = create_production_config()
+    from production_trading_system import GlobalConfig
+    from dataclasses import asdict
+    global_cfg = GlobalConfig(total_capital=1200.0, paper_trading=True)
+    return {
+        "global_config": asdict(global_cfg),
+        "bot_configs": [asdict(c) for c in bot_cfgs],
+    }
+
+@app.get("/api/performance-metrics")
+async def get_performance_metrics_extended():
+    """Extended performance metrics (alias of /api/metrics with extra fields)."""
+    base = await get_performance_metrics()
+    # Enrich with additional fields expected by React components
+    data = base.model_dump() if hasattr(base, 'model_dump') else dict(base)
+    data["sharpe_ratio"] = 0.0
+    data["profit_factor"] = 0.0
+    if trading_system and len(trading_system.trade_history) >= 2:
+        returns = [t.pnl_pct for t in trading_system.trade_history if t.pnl_pct is not None]
+        if returns:
+            import numpy as np
+            arr = np.array(returns)
+            vol = arr.std() * (252 ** 0.5)
+            ann_ret = arr.mean() * 252
+            data["sharpe_ratio"] = float(ann_ret / vol) if vol > 0 else 0.0
+            wins = arr[arr > 0]
+            losses = arr[arr <= 0]
+            if len(losses) > 0 and abs(losses.mean()) > 0:
+                data["profit_factor"] = float((wins.mean() * len(wins)) / (abs(losses.mean()) * len(losses)))
+    return data
 
 @app.post("/api/backtest")
-async def run_backtest():
-    """Run backtest analysis using the optimized configuration test."""
-    try:
-        import subprocess
-        import sys
-        
-        # Run the test_optimized_config.py script
-        result = subprocess.run(
-            [sys.executable, "test_optimized_config.py"],
-            capture_output=True,
-            text=True,
-            cwd="/workspace/trading_bot_ml"
+async def run_backtest_endpoint(background_tasks: BackgroundTasks):
+    """Trigger the walk-forward backtest in the background."""
+    import subprocess, sys
+    def _run():
+        subprocess.run(
+            [sys.executable, "run_backtest.py", "--days", "90", "--splits", "3",
+             "--output", "backtest_results.json"],
+            capture_output=True
         )
-        
-        if result.returncode == 0:
-            return {
-                "success": True,
-                "output": result.stdout,
-                "analysis_complete": True,
-                "recommendations": [
-                    "START with Conservative Optimized configuration",
-                    "MONITOR trade frequency (target: 5-10 trades/day)",
-                    "SCALE UP to Balanced/Aggressive if performance is good",
-                    "MAINTAIN strict risk management protocols",
-                    "REVIEW and adjust parameters weekly based on results"
-                ]
-            }
-        else:
-            return {
-                "success": False,
-                "error": result.stderr,
-                "output": result.stdout
-            }
-    except Exception as e:
-        enhanced_logger.log_structured(LogLevel.ERROR, LogCategory.API, f"Error running backtest: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    background_tasks.add_task(_run)
+    return {"message": "Backtest started — results will be written to backtest_results.json"}
 
-# Error handlers
+@app.get("/api/backtest/results")
+async def get_backtest_results():
+    """Return the latest backtest results if available."""
+    if os.path.exists("backtest_results.json"):
+        with open("backtest_results.json") as f:
+            return json.load(f)
+    return {"message": "No backtest results yet — POST /api/backtest to run one"}
+
+# ── Error handlers ─────────────────────────────────────────────────────────
+
+# Error handlers — must return Response objects, not plain dicts
+from fastapi.responses import JSONResponse
+
 @app.exception_handler(404)
 async def not_found_handler(request, exc):
-    from fastapi.responses import JSONResponse
-    return JSONResponse(
-        status_code=404,
-        content={"error": "Endpoint not found"}
-    )
+    return JSONResponse(status_code=404, content={"error": "Endpoint not found"})
 
 @app.exception_handler(500)
 async def internal_error_handler(request, exc):
-    from fastapi.responses import JSONResponse
-    return JSONResponse(
-        status_code=500,
-        content={"error": "Internal server error"}
-    )
-
+    return JSONResponse(status_code=500, content={"error": "Internal server error"})
 
 def main():
     """Run the API server."""
     print("🚀 Starting Trading Bot ML API Server...")
-    print("📊 Dashboard will be available at: http://localhost:12000")
-    print("🔧 API documentation at: http://localhost:12000/docs")
+    print("📊 Dashboard will be available at: http://localhost:8000")
+    print("🔧 API documentation at: http://localhost:8000/docs")
     
-    # Mount static files - serve React build (AFTER all API routes are defined)
-    # This prevents conflicts between API routes and static file serving
-    frontend_dist = Path("frontend_react/dist")
-    frontend_index = frontend_dist / "index.html"
-    
-    if frontend_index.exists():
-        print("✅ Frontend build found - enabling full-stack mode")
-        try:
-            app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="static")
-        except RuntimeError as e:
-            print(f"⚠️  Could not mount static files: {e}. API-only mode.")
-    else:
-        print("⚠️  Frontend build not found. Running in API-only mode.")
-        print(f"   Expected: {frontend_index.absolute()}")
+    # Ensure frontend directory exists
+    Path("frontend").mkdir(exist_ok=True)
     
     # Run server
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=12000,
+        port=8000,
         log_level="info",
         access_log=True
     )
