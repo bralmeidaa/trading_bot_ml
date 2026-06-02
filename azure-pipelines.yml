@@ -43,16 +43,16 @@ stages:
         workingDirectory: '$(deploymentPath)'
         script: | 
           echo "🛑 Stopping and removing containers with verbose output..."
-          sudo docker compose down --rmi all -v || true
+          docker compose down --rmi all -v || true
           
           echo "🧹 Aggressive Docker cleanup..."
-          sudo docker system prune -af --volumes
+          docker system prune -af --volumes
           
           echo "🗑️ Removing dangling images and build cache..."
-          sudo docker builder prune -af || true
+          docker builder prune -af || true
           
           echo "📊 Docker system info after cleanup:"
-          sudo docker system df
+          docker system df
 
     - task: Bash@3
       displayName: 'Clean deployment folder'
@@ -99,11 +99,9 @@ stages:
           echo "🔨 Building Docker image with no cache to ensure fresh build..."
           echo "📂 Current directory contents:"
           ls -la
-          
-          docker buildx create --use
-          
+
           echo "🏗️ Building image for platform linux/arm64..."
-          sudo docker buildx build \
+          docker buildx build \
           --platform linux/arm64 \
           --tag '$(imageRepository):$(dockerImageLatestTag)' \
           --file $(dockerfilePath) \
@@ -184,19 +182,19 @@ stages:
                 set -e
                 
                 echo "🔄 Pulling latest images..."
-                sudo docker compose pull
+                docker compose pull
                 
                 echo "🚀 Starting new containers with fresh images..."
-                sudo docker compose up -d --force-recreate --remove-orphans
+                docker compose up -d --force-recreate --remove-orphans
                   
                 echo "⏳ Waiting for services to start..."
                 sleep 30
 
                 echo "📋 Current running containers:"
-                sudo docker compose ps
+                docker compose ps
                 
                 echo "📊 Container logs (last 20 lines):"
-                sudo docker compose logs --tail=20
+                docker compose logs --tail=20
                 
                 echo "✅ Deployment completed successfully!"
 
@@ -259,16 +257,16 @@ stages:
           echo "🔍 Troubleshooting deployment failure..."
           
           echo "📊 Docker system status:"
-          sudo docker system df
+          docker system df
           
           echo "📋 Current containers:"
-          sudo docker compose ps -a
+          docker compose ps -a
           
           echo "📝 Container logs (last 50 lines):"
-          sudo docker compose logs --tail=50
+          docker compose logs --tail=50
           
           echo "🏗️ Image information:"
-          sudo docker images | grep trading-bot
+          docker images | grep trading-bot
           
           echo "🌐 Network connectivity test:"
           curl -v http://localhost:12000/api/health || echo "Health check failed"
@@ -279,13 +277,13 @@ stages:
 #             cd $(deploymentPath)
             
 #             echo "🛑 Stopping current containers..."
-#             sudo docker compose down
+#             docker compose down
             
 #             echo "🔄 Rolling back to previous image..."
-#             sudo docker tag $(dockerImageName):previous $(dockerImageName):latest
+#             docker tag $(dockerImageName):previous $(dockerImageName):latest
             
 #             echo "🚀 Starting previous version..."
-#             sudo docker compose up -d
+#             docker compose up -d
             
 #             echo "✅ Rollback completed!"
 #           EOF
