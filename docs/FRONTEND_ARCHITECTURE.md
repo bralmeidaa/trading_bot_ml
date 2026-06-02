@@ -120,6 +120,15 @@ mas o backend tem catch-all SPA para deep links diretos.
 - **`useLogs()`** — `/logs`, polling 20s
 - **`useConfig()`** — `/config/full`, sem polling
 
+### Loading sem flicker (importante)
+
+`useApi` mantém `loading=true` **apenas até a primeira resposta**. Em refetches de
+polling, os dados antigos continuam na tela enquanto a atualização acontece em background
+— **não** volta para o skeleton. Isso elimina o "piscar" da UI a cada ciclo.
+
+> Se adicionar um novo componente, **não** renderize skeleton baseado em `loading`
+> após o primeiro load. Use `loading && !data` se precisar de um estado inicial.
+
 ### Intervalos de polling (resumo)
 
 | Recurso | Intervalo |

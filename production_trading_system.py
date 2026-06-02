@@ -177,30 +177,38 @@ class ProductionTradingSystem:
 
         try:
             while True:
+                cycle_start = time.time()
                 # Check if we need to reset daily stats
                 self._check_daily_reset()
-                
+
                 # Check emergency stops
                 if self._check_emergency_stops():
                     logger.critical("🛑 Emergency stop triggered! Shutting down system.")
                     break
-                
+
                 # Process each bot
                 for bot_id, config in self.bot_configs.items():
                     if not config.enabled:
                         continue
-                    
+
                     try:
                         await self._process_bot(bot_id, config)
                     except Exception as e:
                         logger.error(f"Error processing bot {bot_id}: {e}")
-                
+
                 # Update system metrics
                 self._update_metrics()
-                
+
                 # Log system status
                 self._log_system_status()
-                
+
+                # Heartbeat: how long the cycle took (detects loop-blocking issues)
+                cycle_elapsed = time.time() - cycle_start
+                if cycle_elapsed > 5:
+                    logger.warning(f"⏱️ Slow trading cycle: {cycle_elapsed:.1f}s")
+                else:
+                    logger.debug(f"Cycle completed in {cycle_elapsed:.2f}s")
+
                 # Wait before next iteration
                 await asyncio.sleep(30)  # Check every 30 seconds
                 
@@ -214,24 +222,33 @@ class ProductionTradingSystem:
     async def _process_bot(self, bot_id: str, config: BotConfig):
         """Process individual bot logic."""
         try:
-            # Get current market data
-            ohlcv = self.exchange.fetch_ohlcv(config.symbol, config.timeframe, limit=200)
+            # Get current market data — run blocking CCXT call off the event loop
+            # so it never starves the FastAPI server sharing this loop.
+            ohlcv = await asyncio.to_thread(
+                self.exchange.fetch_ohlcv, config.symbol, config.timeframe, None, 200
+            )
             if not ohlcv or len(ohlcv) < 100:
                 return
-            
+
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             current_price = df.iloc[-1]['close']
-            
-            # Generate signals
+
+            # Generate signals — ML training inside is CPU-bound; offload to a thread
             signal_generator = self.signal_generators[bot_id]
-            signals = signal_generator.generate_signals(df)
-            
+            signals = await asyncio.to_thread(signal_generator.generate_signals, df)
+
             if not signals:
+                logger.debug(f"[{bot_id}] No signal this cycle")
                 return
             
             # Get the latest signal
             latest_signal = signals[-1]
-            
+            logger.info(
+                f"[{bot_id}] Signal: dir={latest_signal.direction} "
+                f"conf={latest_signal.confidence:.2f} strength={latest_signal.strength:.2f} "
+                f"@ ${current_price:.4f}"
+            )
+
             # Check if we should enter a new trade
             if self._should_enter_trade(bot_id, config, latest_signal):
                 await self._enter_trade(bot_id, config, latest_signal, current_price)
@@ -608,7 +625,10 @@ class ProductionTradingSystem:
 
         while True:
             try:
-                batch = self.exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=limit)
+                # Offload blocking CCXT call so the API event loop stays responsive
+                batch = await asyncio.to_thread(
+                    self.exchange.fetch_ohlcv, symbol, timeframe, since, limit
+                )
             except Exception as e:
                 logger.error(f"Error fetching history for {symbol} {timeframe}: {e}")
                 break
@@ -639,12 +659,16 @@ class ProductionTradingSystem:
 
         for bot_id, config in self.bot_configs.items():
             try:
+                t0 = time.time()
                 df = await self._fetch_historical_data(config.symbol, config.timeframe, days=365)
                 if df.empty:
                     logger.warning(f"No historical data for {bot_id} — model will warm up on live data")
                     continue
-                self.signal_generators[bot_id].initialize_from_history(df)
+                # Training (sklearn .fit) is CPU-bound — run in a thread so it
+                # does not block the shared API event loop for minutes.
+                await asyncio.to_thread(self.signal_generators[bot_id].initialize_from_history, df)
                 initialized += 1
+                logger.info(f"[{bot_id}] Pre-trained in {time.time() - t0:.1f}s ({len(df)} candles)")
             except Exception as e:
                 logger.warning(f"Could not pre-train model for {bot_id}: {e}")
 

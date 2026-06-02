@@ -30,6 +30,22 @@ Erros 404/500 não tratados retornam:
 > ⚠️ **Regra de ouro para o frontend:** o hook `useApi.js` espera `result.success` e usa `result.data`.
 > Componentes que fazem `fetch()` cru devem desembrulhar com `json.data ?? json`.
 
+### Header `X-Process-Time`
+Toda resposta inclui o header `X-Process-Time` (segundos). Requisições acima de 1s
+são logadas como `SLOW <method> <path> took <n>s` para diagnóstico de lentidão.
+
+---
+
+## Concorrência / event loop
+
+O sistema de trading roda no **mesmo event loop** do FastAPI. Todas as operações
+bloqueantes (CCXT `fetch_ohlcv`, treino de ML com sklearn, `load_markets`) são
+executadas via `asyncio.to_thread()` para **não travar** o servidor HTTP.
+
+> 🐛 **Histórico:** antes dessa correção, `POST /api/start` disparava treino de ML
+> síncrono no loop → todos os endpoints davam 504 por minutos. Se voltar a ver 504
+> em massa, procure por chamadas bloqueantes novas que não passem por `to_thread`.
+
 ---
 
 ## Autenticação

@@ -51,6 +51,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+import logging
+import time as _time
+logger = logging.getLogger("api_server")
+
+
+@app.middleware("http")
+async def timing_middleware(request, call_next):
+    """Log slow requests (>1s) to help diagnose event-loop stalls / 504s."""
+    start = _time.time()
+    response = await call_next(request)
+    elapsed = _time.time() - start
+    if elapsed > 1.0:
+        logger.warning(f"SLOW {request.method} {request.url.path} took {elapsed:.2f}s")
+    response.headers["X-Process-Time"] = f"{elapsed:.3f}"
+    return response
+
+
 # Global state
 trading_system: Optional[ProductionTradingSystem] = None
 system_task: Optional[asyncio.Task] = None
@@ -220,8 +237,12 @@ async def start_system():
         raise HTTPException(400, "System is already running")
     try:
         global_config, bot_configs = create_production_config()
-        trading_system = ProductionTradingSystem(global_config, bot_configs)
-        system_task    = asyncio.create_task(trading_system.start())
+        # Construction calls exchange.load_markets() (blocking network I/O) —
+        # build it in a thread so we don't stall the event loop during startup.
+        trading_system = await asyncio.to_thread(
+            ProductionTradingSystem, global_config, bot_configs
+        )
+        system_task = asyncio.create_task(trading_system.start())
         return ok({"message": "Trading system started successfully"})
     except Exception as exc:
         raise HTTPException(500, f"Failed to start system: {exc}")

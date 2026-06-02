@@ -15,11 +15,14 @@ export function useApi(apiCall, dependencies = [], interval = null) {
       return;
     }
 
+    // NOTE: we intentionally do NOT setLoading(true) here on background
+    // refetches. Doing so made every poll flash the UI to a skeleton.
+    // `loading` stays true only until the FIRST successful response;
+    // afterwards we keep showing stale data while refreshing in place.
     try {
-      setLoading(true);
       setError(null);
       const result = await apiCall();
-      
+
       if (result.success) {
         setData(result.data);
         setConsecutiveErrors(0); // Reset error count on success
