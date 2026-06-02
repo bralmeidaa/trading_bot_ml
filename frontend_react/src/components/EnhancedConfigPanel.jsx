@@ -31,7 +31,7 @@ const EnhancedConfigPanel = () => {
   const loadConfiguration = async () => {
     try {
       setLoading(true);
-      const response = await apiService.get('/api/config/full');
+      const response = await apiService.get('/config/full');
       setConfig(response);
     } catch (error) {
       showNotification('Failed to load configuration', 'error');
@@ -43,7 +43,7 @@ const EnhancedConfigPanel = () => {
 
   const loadBackups = async () => {
     try {
-      const response = await apiService.get('/api/config/backups');
+      const response = await apiService.get('/config/backups');
       setBackups(response.backups || []);
     } catch (error) {
       console.error('Error loading backups:', error);
@@ -53,7 +53,7 @@ const EnhancedConfigPanel = () => {
   const updateGlobalConfig = async (updates) => {
     try {
       setSaving(true);
-      await apiService.put('/api/config/global', updates);
+      await apiService.put('/config/global', updates);
       showNotification('Global configuration updated successfully', 'success');
       await loadConfiguration();
     } catch (error) {
@@ -67,7 +67,7 @@ const EnhancedConfigPanel = () => {
   const updateBotConfig = async (botId, updates) => {
     try {
       setSaving(true);
-      await apiService.put(`/api/config/bot/${botId}`, updates);
+      await apiService.put(`/config/bot/${botId}`, updates);
       showNotification(`Bot ${botId} configuration updated successfully`, 'success');
       await loadConfiguration();
     } catch (error) {
@@ -81,7 +81,7 @@ const EnhancedConfigPanel = () => {
   const addBot = async () => {
     try {
       setSaving(true);
-      await apiService.post('/api/config/bot', newBot);
+      await apiService.post('/config/bot', newBot);
       showNotification('Bot added successfully', 'success');
       setShowAddBot(false);
       setNewBot({
@@ -108,7 +108,7 @@ const EnhancedConfigPanel = () => {
 
     try {
       setSaving(true);
-      await apiService.delete(`/api/config/bot/${botId}`);
+      await apiService.delete(`/config/bot/${botId}`);
       showNotification(`Bot ${botId} removed successfully`, 'success');
       await loadConfiguration();
     } catch (error) {
@@ -124,7 +124,7 @@ const EnhancedConfigPanel = () => {
 
     try {
       setSaving(true);
-      await apiService.post(`/api/config/restore/${backupFilename}`);
+      await apiService.post(`/config/restore/${backupFilename}`);
       showNotification('Configuration restored successfully', 'success');
       await loadConfiguration();
     } catch (error) {

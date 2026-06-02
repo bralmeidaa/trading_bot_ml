@@ -33,8 +33,9 @@ const SignalQualityMonitor = () => {
     try {
       const response = await fetch('/api/signal-quality');
       if (response.ok) {
-        const data = await response.json();
-        setQualityData(data);
+        const json = await response.json();
+        // API responses are wrapped in {success, data}; unwrap defensively
+        setQualityData(json.data ?? json);
       }
     } catch (error) {
       console.error('Erro ao buscar dados de qualidade:', error);

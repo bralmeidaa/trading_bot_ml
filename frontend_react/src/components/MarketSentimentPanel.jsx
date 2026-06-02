@@ -33,8 +33,9 @@ const MarketSentimentPanel = () => {
       const promises = symbols.map(async (symbol) => {
         const response = await fetch(`/api/market-sentiment/${symbol}`);
         if (response.ok) {
-          const data = await response.json();
-          return { symbol: symbol.split('/')[0], data };
+          const json = await response.json();
+          // API responses are wrapped in {success, data}; unwrap defensively
+          return { symbol: symbol.split('/')[0], data: json.data ?? json };
         }
         return null;
       });
