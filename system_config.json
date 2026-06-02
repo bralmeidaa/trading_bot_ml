@@ -1,7 +1,7 @@
 {
   "trading_mode": "paper",
-  "total_capital": 1200.0,
-  "daily_loss_limit": 0.045,
+  "total_capital": 1500.0,
+  "daily_loss_limit": 0.04,
   "daily_profit_target": 0.025,
-  "updated_at": "2025-09-09T16:43:28.394540"
+  "updated_at": "2026-06-01T19:30:39.479424"
 }
