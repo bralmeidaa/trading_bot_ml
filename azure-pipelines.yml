@@ -100,7 +100,7 @@ stages:
           echo "📂 Current directory contents:"
           ls -la
 
-          docker pull python:3.12-slim
+          sudo docker pull python:3.12-slim
           
           echo "🏗️ Building image for platform linux/arm64..."
           sudo docker buildx build \
