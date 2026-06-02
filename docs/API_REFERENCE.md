@@ -46,6 +46,14 @@ executadas via `asyncio.to_thread()` para **não travar** o servidor HTTP.
 > síncrono no loop → todos os endpoints davam 504 por minutos. Se voltar a ver 504
 > em massa, procure por chamadas bloqueantes novas que não passem por `to_thread`.
 
+### Recursos / memória (VM 2 cores ARM, 16G, sem swap)
+
+- `docker-compose.yml`: trading-bot limitado a **3G / 1.5 CPU** (era 1G/1.0).
+  Sem swap, o pico de memória do pré-treino com 1G causava **OOM kill + restart**.
+- Janela histórica de treino é limitada por timeframe (`_HISTORY_DAYS` em
+  `production_trading_system.py`): 1m=30d, 5m=120d, 15m+=365d → ~35-45k candles,
+  mantendo memória e tempo de treino sob controle independente do limite do container.
+
 ---
 
 ## Autenticação

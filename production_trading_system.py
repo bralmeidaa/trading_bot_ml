@@ -652,6 +652,20 @@ class ProductionTradingSystem:
         logger.info(f"Fetched {len(df)} candles for {symbol} {timeframe} ({days}d history)")
         return df
 
+    # History window per timeframe — targets ~35-45k candles so memory and
+    # training time stay bounded regardless of the container limit.
+    # 365d of 1m = ~525k rows → memory balloon + OOM on a no-swap VM.
+    _HISTORY_DAYS = {
+        '1m': 30,    # ~43k candles
+        '3m': 90,    # ~43k
+        '5m': 120,   # ~35k
+        '15m': 365,  # ~35k
+        '30m': 365,  # ~17k
+        '1h': 365,   # ~9k
+        '4h': 365,
+        '1d': 365,
+    }
+
     async def _initialize_models(self):
         """Pre-train ML models with historical data before the live loop starts."""
         logger.info("Pre-training ML models with historical data...")
@@ -660,7 +674,8 @@ class ProductionTradingSystem:
         for bot_id, config in self.bot_configs.items():
             try:
                 t0 = time.time()
-                df = await self._fetch_historical_data(config.symbol, config.timeframe, days=365)
+                days = self._HISTORY_DAYS.get(config.timeframe, 180)
+                df = await self._fetch_historical_data(config.symbol, config.timeframe, days=days)
                 if df.empty:
                     logger.warning(f"No historical data for {bot_id} — model will warm up on live data")
                     continue

@@ -16,9 +16,12 @@ services:
     restart: unless-stopped
     deploy:
       resources:
+        # VM: 2 ARM cores / 16G RAM, NO swap. ML pre-training (365d of 1m
+        # candles + walk-forward) spikes memory well past 1G — with no swap
+        # that = instant OOM kill + restart. Give generous headroom.
         limits:
-          memory: 1G
-          cpus: '1.0'
+          memory: 3G
+          cpus: '1.5'
         reservations:
           memory: 512M
           cpus: '0.5'
@@ -44,10 +47,10 @@ services:
       resources:
         limits:
           memory: 256M
-          cpus: '0.5'
+          cpus: '0.25'
         reservations:
           memory: 128M
-          cpus: '0.25'
+          cpus: '0.1'
     networks:
       - trading-network
 
@@ -69,10 +72,10 @@ services:
       resources:
         limits:
           memory: 256M
-          cpus: '0.5'
+          cpus: '0.25'
         reservations:
           memory: 128M
-          cpus: '0.25'
+          cpus: '0.1'
     networks:
       - trading-network
 
