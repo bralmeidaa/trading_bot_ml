@@ -100,6 +100,8 @@ stages:
           echo "📂 Current directory contents:"
           ls -la
           
+          docker buildx create --use
+          
           echo "🏗️ Building image for platform linux/arm64..."
           sudo docker buildx build \
           --platform linux/arm64 \
