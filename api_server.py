@@ -595,8 +595,8 @@ async def internal_error_handler(request, exc):
 def main():
     """Run the API server."""
     print("🚀 Starting Trading Bot ML API Server...")
-    print("📊 Dashboard will be available at: http://localhost:8000")
-    print("🔧 API documentation at: http://localhost:8000/docs")
+    print("📊 Dashboard will be available at: http://localhost:12000")
+    print("🔧 API documentation at: http://localhost:12000/docs")
     
     # Ensure frontend directory exists
     Path("frontend").mkdir(exist_ok=True)
@@ -605,7 +605,7 @@ def main():
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=8000,
+        port=12000,
         log_level="info",
         access_log=True
     )
