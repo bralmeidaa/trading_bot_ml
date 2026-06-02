@@ -95,22 +95,29 @@ class BotConfigUpdate(BaseModel):
     take_profit_pct: Optional[float] = None
     enabled: Optional[bool] = None
 
-# Static files — serve React build if available, skip gracefully if not
+# Static file paths
 _REACT_DIST = Path("frontend_react/dist")
 _LEGACY_FRONTEND = Path("frontend")
 
-if _REACT_DIST.exists():
-    app.mount("/static", StaticFiles(directory=str(_REACT_DIST)), name="static")
+# Vite builds assets into dist/assets/ and the generated index.html references
+# them as /assets/... (absolute path from root). Mount that directory directly
+# so the browser can resolve them without a /static prefix.
+if (_REACT_DIST / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=str(_REACT_DIST / "assets")), name="assets")
 elif _LEGACY_FRONTEND.exists():
     app.mount("/static", StaticFiles(directory=str(_LEGACY_FRONTEND)), name="static")
 
+
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
-    """Serve the dashboard (React build or legacy HTML)."""
+    """Serve the React SPA entry point."""
     for candidate in [_REACT_DIST / "index.html", _LEGACY_FRONTEND / "index.html"]:
         if candidate.exists():
             return HTMLResponse(content=candidate.read_text(encoding="utf-8"))
-    return HTMLResponse(content="<h1>Dashboard not found — run <code>npm run build</code> inside frontend_react/</h1>", status_code=404)
+    return HTMLResponse(
+        content="<h1>Dashboard not found — run <code>npm run build</code> inside frontend_react/</h1>",
+        status_code=404,
+    )
 
 @app.get("/api/status", response_model=SystemStatus)
 async def get_system_status():
@@ -578,6 +585,22 @@ async def get_backtest_results():
         with open("backtest_results.json") as f:
             return json.load(f)
     return {"message": "No backtest results yet — POST /api/backtest to run one"}
+
+# ── SPA catch-all — must be LAST route ─────────────────────────────────────
+# Returns index.html for any path that didn't match an API route.
+# This enables React Router client-side navigation (e.g. /dashboard, /settings).
+
+@app.get("/{full_path:path}", response_class=HTMLResponse)
+async def serve_spa(full_path: str):
+    """Fallback for React Router deep links."""
+    # Never intercept API or asset routes (safety net — they're registered first)
+    if full_path.startswith("api/") or full_path.startswith("assets/"):
+        raise HTTPException(status_code=404, detail="Not found")
+    index = _REACT_DIST / "index.html"
+    if index.exists():
+        return HTMLResponse(content=index.read_text(encoding="utf-8"))
+    raise HTTPException(status_code=404, detail="Frontend not built")
+
 
 # ── Error handlers ─────────────────────────────────────────────────────────
 
