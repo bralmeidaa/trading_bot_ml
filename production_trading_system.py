@@ -802,7 +802,25 @@ class OptimizedSignalGenerator:
             combined_signal = self._combine_signals([
                 momentum_signal, mean_reversion_signal, volume_signal, ml_signal
             ])
-            
+
+            # SNAPSHOT: one greppable line per cycle with raw indicators + which
+            # sub-signals fired. Enables near-miss analysis ("how close to a trade")
+            # without guessing. grep "SNAPSHOT" in the logs.
+            def _fired(sig):
+                return f"d{sig['direction']}c{sig['confidence']:.2f}" if sig else "-"
+            p = self.params
+            logger.info(
+                f"SNAPSHOT [{self.symbol}/{self.timeframe}] "
+                f"px={current_price:.4f} "
+                f"rsi={latest_row.get('rsi', float('nan')):.1f}(os{p['rsi_oversold']}/ob{p['rsi_overbought']}) "
+                f"bb={latest_row.get('bb_position', float('nan')):.2f} "
+                f"mom5={latest_row.get('momentum_5', float('nan')):.4f}(thr{p['momentum_threshold']}) "
+                f"vol={latest_row.get('volume_ratio', float('nan')):.2f}(thr{p['volume_threshold']}) "
+                f"| mom={_fired(momentum_signal)} mr={_fired(mean_reversion_signal)} "
+                f"volb={_fired(volume_signal)} ml={_fired(ml_signal)} "
+                f"| combined={'d%dc%.2f' % (combined_signal['direction'], combined_signal['confidence']) if combined_signal else 'none'}"
+            )
+
             if combined_signal:
                 # Calculate stop loss and take profit
                 atr = latest_row.get('atr', current_price * 0.02)
