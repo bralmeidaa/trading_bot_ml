@@ -137,6 +137,52 @@ class TestIndicators:
         assert in_range >= 0.90, "BB position must be near [0,1] for most bars"
 
 
+class TestSignalCombination:
+    """
+    Regression tests for _combine_signals confidence aggregation.
+
+    Bug history: confidence was a weighted SUM (sum of active weights < 1 when
+    fewer than all 4 signal types fire), so the combined confidence could never
+    reach the 0.65 entry threshold with the required minimum of 2 signals.
+    Result: 2 days live, signals generated (conf 0.39-0.48) but ZERO trades.
+    The fix makes confidence a weighted AVERAGE (divide by active weight).
+    """
+
+    def _strong(self, sig_type, direction=1, strength=1.0, confidence=0.8):
+        return {"type": sig_type, "direction": direction,
+                "strength": strength, "confidence": confidence}
+
+    def test_requires_at_least_two_signals(self, signal_gen):
+        assert signal_gen._combine_signals([self._strong("momentum"), None, None, None]) is None
+
+    def test_two_confident_signals_pass_threshold(self, signal_gen):
+        """momentum+ml at production confidences must now exceed 0.65."""
+        mom = self._strong("momentum", confidence=0.84)
+        ml = self._strong("ml", confidence=0.60)
+        result = signal_gen._combine_signals([mom, ml, None, None])
+        assert result is not None
+        # Weighted avg: (0.84*0.3 + 0.60*0.2)/(0.3+0.2) = 0.744
+        assert result["confidence"] > 0.65
+        assert result["confidence"] == pytest.approx(0.744, abs=0.01)
+
+    def test_confidence_is_average_not_sum(self, signal_gen):
+        """Confidence must never exceed the max individual confidence (it's an average)."""
+        mom = self._strong("momentum", confidence=0.84)
+        vol = self._strong("volume", confidence=0.90)
+        result = signal_gen._combine_signals([mom, None, vol, None])
+        assert result is not None
+        assert result["confidence"] <= 0.90 + 1e-9
+
+    def test_two_weak_signals_stay_below_threshold(self, signal_gen):
+        """Two mediocre signals (0.5 each) average to 0.5 — must not pass 0.65."""
+        s1 = self._strong("momentum", confidence=0.5)
+        s2 = self._strong("ml", confidence=0.5)
+        result = signal_gen._combine_signals([s1, s2, None, None])
+        # Either blocked by vote gate (None) or confidence below threshold
+        if result is not None:
+            assert result["confidence"] < 0.65
+
+
 class TestWalkForwardValidation:
     def test_walk_forward_returns_dict(self, signal_gen, large_ohlcv):
         df = signal_gen._add_indicators(large_ohlcv.copy())

@@ -264,19 +264,28 @@ class ProductionTradingSystem:
             logger.error(f"Error in _process_bot for {bot_id}: {e}")
     
     def _should_enter_trade(self, bot_id: str, config: BotConfig, signal: TradeSignal) -> bool:
-        """Determine if we should enter a new trade."""
+        """Determine if we should enter a new trade. Logs the rejection reason."""
         # Check confidence threshold
         if signal.confidence < config.confidence_threshold:
+            logger.info(
+                f"[{bot_id}] Trade skipped: confidence {signal.confidence:.2f} "
+                f"< threshold {config.confidence_threshold:.2f}"
+            )
             return False
-        
+
         # Check if we already have a trade for this symbol
-        existing_trades = [trade for trade in self.active_trades.values() 
+        existing_trades = [trade for trade in self.active_trades.values()
                           if trade.symbol == config.symbol]
         if existing_trades:
+            logger.info(f"[{bot_id}] Trade skipped: position already open for {config.symbol}")
             return False
-        
+
         # Check global trade limits
         if len(self.active_trades) >= self.global_config.max_concurrent_trades:
+            logger.info(
+                f"[{bot_id}] Trade skipped: max concurrent trades "
+                f"({self.global_config.max_concurrent_trades}) reached"
+            )
             return False
         
         # Check daily limits
@@ -982,37 +991,45 @@ class OptimizedSignalGenerator:
         
         long_vote = 0.0
         short_vote = 0.0
-        total_confidence = 0.0
+        weighted_conf_sum = 0.0
+        active_weight = 0.0   # sum of weights of signals that actually fired
         metadata = {}
-        
+
         for signal in valid_signals:
             weight = weights.get(signal['type'], 0.1)
             weighted_strength = signal['strength'] * signal['confidence'] * weight
-            
+
             if signal['direction'] == 1:
                 long_vote += weighted_strength
             else:
                 short_vote += weighted_strength
-            
-            total_confidence += signal['confidence'] * weight
+
+            weighted_conf_sum += signal['confidence'] * weight
+            active_weight += weight
             metadata[signal['type']] = signal
-        
+
+        # Confidence = weighted AVERAGE of the agreeing signals (not a weighted sum).
+        # A plain sum is bounded by the sum of active weights (<1 when only a subset
+        # of the 4 signal types fire), making it mathematically impossible to reach
+        # the 0.65 entry threshold with the required minimum of 2 signals.
+        confidence = weighted_conf_sum / active_weight if active_weight > 0 else 0.0
+
         # Decision logic
         if long_vote > short_vote and long_vote > 0.3:
             return {
                 'direction': 1,
                 'strength': min(long_vote, 1.0),
-                'confidence': min(total_confidence, 0.95),
+                'confidence': min(confidence, 0.95),
                 'metadata': metadata
             }
         elif short_vote > long_vote and short_vote > 0.3:
             return {
                 'direction': -1,
                 'strength': min(short_vote, 1.0),
-                'confidence': min(total_confidence, 0.95),
+                'confidence': min(confidence, 0.95),
                 'metadata': metadata
             }
-        
+
         return None
     
     def _update_model(self, df: pd.DataFrame):
