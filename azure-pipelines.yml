@@ -228,6 +228,7 @@ stages:
                 
                 if [ $response -eq 200 ]; then
                   echo "✅ Dashboard is accessible"
+                  curl -X POST http://localhost:12000/start || true
                 else
                   echo "❌ Dashboard is not accessible (HTTP $response)"
                   exit 1
