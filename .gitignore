@@ -20,3 +20,8 @@ logs/
 
 # Node
 frontend/node_modules/
+
+# Backtest run artifacts
+bt_run.log
+bt_aligned.json
+backtest_results.json

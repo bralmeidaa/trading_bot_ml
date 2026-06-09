@@ -32,16 +32,19 @@ from sklearn.model_selection import TimeSeriesSplit
 
 from production_trading_system import OptimizedSignalGenerator, create_production_config
 
-# -- Execution cost model ---------------------------------------------------
+# -- Execution cost model (identical to live _enter_trade/_exit_trade) ------
 COMMISSION = 0.001   # 0.1% per side (Binance VIP 0)
 SLIPPAGE   = 0.0005  # 0.05% market impact
 
-# -- Trade exit model (fixed %, not ATR-based) ------------------------------
-# ATR on 5m crypto is ~0.15-0.35% — too tight for realistic stops.
-# 1.5% stop / 3.0% TP = 1:2 R/R gross; breakeven WR = 33%.
-STOP_PCT      = 0.015   # 1.5% stop loss from entry
-TP_PCT        = 0.030   # 3.0% take profit from entry
-MAX_HOLD_BARS = 100     # force-exit after 100 bars if neither stop nor TP hit
+# -- Trade exit model: ATR-based, SAME formula as live generate_signals -----
+#   long:  stop = price - 1.5*ATR ; tp = price + 2.5*ATR
+#   short: stop = price + 1.5*ATR ; tp = price - 2.5*ATR
+ATR_STOP_MULT = 1.5
+ATR_TP_MULT   = 2.5
+MAX_HOLD_BARS = 200     # force-exit if neither stop nor TP hit
+
+# Entry gate, same as live BotConfig.confidence_threshold
+CONFIDENCE_THRESHOLD = 0.65
 
 # -- Walk-forward settings --------------------------------------------------
 DEFAULT_DAYS   = 365
@@ -88,133 +91,88 @@ def fetch_history(symbol: str, timeframe: str, days: int) -> pd.DataFrame:
 
 
 # ==========================================================================
-# Vectorized signal generation (fast — no bar-by-bar loop)
+# Signal evaluation — calls the SAME decision methods as live trading
 # ==========================================================================
 
-def generate_signals_vectorized(test_df: pd.DataFrame, signal_gen: OptimizedSignalGenerator) -> pd.Series:
+def evaluate_bar(signal_gen: OptimizedSignalGenerator, test_df: pd.DataFrame, idx: int):
     """
-    Generate a direction series (+1 long / -1 short / 0 flat) for all test bars.
+    Reproduce exactly what generate_signals() does for a single bar, by calling
+    the real sub-signal methods + _combine_signals on the live generator.
 
-    Strategy: strict mean reversion at extreme RSI/BB levels.
-    ML acts as an optional confirmation for longs only — NOT required.
+    Returns the combined signal dict (with 'direction' and 'confidence') or None.
+    No look-ahead: only data up to and including `idx` is used.
     """
-    direction = pd.Series(0, index=test_df.index)
-
-    has_cols = all(c in test_df.columns for c in ["rsi", "bb_position"])
-    if not has_cols:
-        return direction
-
-    # -- Strict mean reversion (primary signal) ----------------------------
-    # Thresholds chosen for genuinely extreme conditions, not moderate ones.
-    rev_buy  = (test_df["bb_position"] < 0.08) & (test_df["rsi"] < 30)   # extreme oversold
-    rev_sell = (test_df["bb_position"] > 0.92) & (test_df["rsi"] > 70)   # extreme overbought
-
-    direction[rev_buy]  =  1
-    direction[rev_sell] = -1
-
-    # -- ML confirmation (optional uplift for longs) -----------------------
-    # Only ADDS longs where ML is confident; never changes a 0 into a short.
-    if signal_gen.is_fitted:
-        features = signal_gen._prepare_features(test_df)
-        valid = ~features.isna().any(axis=1)
-        if valid.any():
-            X = features[valid]
-            try:
-                X_scaled = signal_gen.scaler.transform(X)
-                proba = signal_gen.model.predict_proba(X_scaled)[:, 1]
-                thresh = signal_gen.params.get("ml_threshold", 0.55)
-                ml_long = pd.Series(False, index=test_df.index)
-                ml_long[valid] = proba > thresh
-
-                # Add ML-confirmed longs that aren't already signalled
-                # (also catches momentum longs missed by strict BB/RSI filter)
-                p = signal_gen.params
-                mom_buy = (
-                    (test_df.get("momentum_5", pd.Series(0, index=test_df.index)) > p.get("momentum_threshold", 0.003)) &
-                    (test_df.get("volume_ratio", pd.Series(1, index=test_df.index)) > p.get("volume_threshold", 1.5)) &
-                    (test_df["rsi"] < p.get("rsi_overbought", 62))
-                )
-                direction[(ml_long) & (mom_buy) & (direction == 0)] = 1
-            except Exception:
-                pass
-
-    return direction
+    row = test_df.iloc[idx]
+    momentum_signal      = signal_gen._check_momentum_signal(row)
+    mean_reversion_signal = signal_gen._check_mean_reversion_signal(row)
+    volume_signal        = signal_gen._check_volume_signal(test_df.iloc[idx - 1: idx + 1])
+    ml_signal            = signal_gen._check_ml_signal(test_df.iloc[idx: idx + 1]) if signal_gen.is_fitted else None
+    return signal_gen._combine_signals(
+        [momentum_signal, mean_reversion_signal, volume_signal, ml_signal]
+    )
 
 
-# ==========================================================================
-# Trade simulation
-# ==========================================================================
-
-def simulate_trades(test_df: pd.DataFrame, signals: pd.Series) -> list:
+def simulate_trades(test_df: pd.DataFrame, signal_gen: OptimizedSignalGenerator) -> list:
     """
-    Simulate trades given a signal series.
-    Entry: close of signal bar + costs.
-    Exit: first bar where low ≤ stop OR high ≥ TP (or MAX_HOLD_BARS).
+    Bar-by-bar simulation using the LIVE signal path + ATR stops + costs.
+    Mirrors live behaviour: one position at a time, enter at the signal bar's
+    close (same as _process_bot), exit when a later bar's high/low hits the
+    ATR-based stop/target (same as _check_trade_exit).
     Returns list of dicts with pnl_pct, direction, bars_held.
     """
     test_df = test_df.reset_index(drop=True)
-    signals = signals.reset_index(drop=True)
     n = len(test_df)
     trades = []
-    i = 0
+    i = 30  # warm-up so indicators are populated
 
     while i < n - 1:
-        sig = int(signals.iloc[i])
-        if sig == 0:
+        combined = evaluate_bar(signal_gen, test_df, i)
+        if not combined or combined["confidence"] < CONFIDENCE_THRESHOLD:
             i += 1
             continue
 
+        direction = combined["direction"]
         row = test_df.iloc[i]
-        atr = float(row.get("atr", row["close"] * 0.02)) or row["close"] * 0.02
-
-        # Entry with costs; stops/TP as fixed % of entry price
         raw_entry = float(row["close"])
-        if sig == 1:
-            entry  = raw_entry * (1 + COMMISSION + SLIPPAGE)
-            stop   = entry * (1 - STOP_PCT)
-            target = entry * (1 + TP_PCT)
+        atr = float(row.get("atr", raw_entry * 0.02)) or raw_entry * 0.02
+
+        # ATR-based stop/target on the RAW price (identical to live formula)
+        if direction == 1:
+            stop   = raw_entry - atr * ATR_STOP_MULT
+            target = raw_entry + atr * ATR_TP_MULT
+            entry  = raw_entry * (1 + COMMISSION + SLIPPAGE)   # cost on entry
         else:
+            stop   = raw_entry + atr * ATR_STOP_MULT
+            target = raw_entry - atr * ATR_TP_MULT
             entry  = raw_entry * (1 - COMMISSION - SLIPPAGE)
-            stop   = entry * (1 + STOP_PCT)
-            target = entry * (1 - TP_PCT)
 
         exit_price = None
         j = i + 1
         limit = min(i + MAX_HOLD_BARS + 1, n)
-
         while j < limit:
             bar = test_df.iloc[j]
             low, high = float(bar["low"]), float(bar["high"])
-            if sig == 1:
-                if low <= stop:
-                    exit_price = stop
-                    break
-                if high >= target:
-                    exit_price = target
-                    break
+            if direction == 1:
+                if low <= stop:    exit_price = stop;   break
+                if high >= target: exit_price = target; break
             else:
-                if high >= stop:
-                    exit_price = stop
-                    break
-                if low <= target:
-                    exit_price = target
-                    break
+                if high >= stop:   exit_price = stop;   break
+                if low <= target:  exit_price = target; break
             j += 1
 
-        # Force exit at close if no stop/TP hit
-        if exit_price is None:
+        if exit_price is None:                       # force-exit at last close
             j = min(j, n - 1)
             exit_price = float(test_df.iloc[j]["close"])
 
-        # Exit with costs
-        if sig == 1:
+        # Cost on exit (long sells, short buys back)
+        if direction == 1:
             exit_net = exit_price * (1 - COMMISSION - SLIPPAGE)
         else:
             exit_net = exit_price * (1 + COMMISSION + SLIPPAGE)
 
-        pnl_pct = (exit_net - entry) / entry * sig
-        trades.append({"pnl_pct": pnl_pct, "direction": sig, "bars_held": j - i})
-        i = j + 1  # no overlapping trades
+        pnl_pct = (exit_net - entry) / entry * direction
+        trades.append({"pnl_pct": pnl_pct, "direction": direction, "bars_held": j - i})
+        i = j + 1  # one position at a time, no overlap
 
     return trades
 
@@ -298,12 +256,10 @@ def run_walk_forward(symbol: str, timeframe: str, df: pd.DataFrame, n_splits: in
             print("  ⚠ model not fitted — skipping")
             continue
 
-        # Add indicators to test fold
+        # Add indicators to test fold (once), then simulate bar-by-bar using
+        # the SAME signal methods the live system calls.
         test_df = signal_gen._add_indicators(test_df.copy()).reset_index(drop=True)
-
-        # Generate signals (vectorised) + simulate trades
-        signals     = generate_signals_vectorized(test_df, signal_gen)
-        fold_trades = simulate_trades(test_df, signals)
+        fold_trades = simulate_trades(test_df, signal_gen)
         all_trades.extend(fold_trades)
 
         if fold_trades:
@@ -391,7 +347,8 @@ def main():
     print(f"  History   : {args.days} days")
     print(f"  Folds     : {args.splits}")
     print(f"  Costs     : {COMMISSION*100:.1f}% commission + {SLIPPAGE*100:.2f}% slippage per side")
-    print(f"  Stop/TP   : {STOP_PCT*100:.1f}% / {TP_PCT*100:.1f}% (fixed %)")
+    print(f"  Stop/TP   : {ATR_STOP_MULT}x / {ATR_TP_MULT}x ATR (same as live)")
+    print(f"  Signals   : live _combine_signals path, confidence >= {CONFIDENCE_THRESHOLD}")
     print("=" * 60)
 
     _, bot_configs = create_production_config()
