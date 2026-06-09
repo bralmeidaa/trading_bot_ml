@@ -97,6 +97,21 @@ short bottom-3, market-neutral**, universo ~15 mais líquidos por data.
 Antes de dinheiro real: (a) Fase 3 — engine de carteira automatizado; (b) paper trading que bata
 com o backtest; (c) atenção ao DD de 32% (sizing + kill-switch).
 
+## Fase 3 — engine entregue (paper)
+
+`backend/strategy/portfolio_engine.py` — `CrossSectionalPortfolioEngine`:
+- Automático, daily, market-neutral (long top-k / short bottom-k), rebalance a cada
+  `rebalance_days`, mark-to-market entre rebalances, custo sobre turnover.
+- Usa o núcleo validado (`backend/strategy/cross_sectional.py`).
+- Kill-switch por drawdown (default 35%), filtro de regime BTC.
+- Persiste equity/daily via repositórios; I/O via `asyncio.to_thread` (não trava a API).
+- Endpoints: `POST /api/portfolio/start|stop`, `GET /api/portfolio` (equity, posições,
+  exposições, rebalances). Separado do bot single-pair — não quebra endpoints atuais.
+- Testes: `test/test_portfolio_engine.py` (9) + `test/test_cross_sectional.py` (14).
+
+**Status:** paper trading pronto. Próximo: rodar paper por período e confe­rir que a
+equity bate com o backtest antes de qualquer capital real.
+
 ## Fontes
 - [Cross-Sectional Momentum in Crypto — Starkiller Capital](https://www.starkiller.capital/post/cross-sectional-momentum-in-cryptocurrency-markets)
 - [Intraday return predictability: momentum, reversal, or both — ScienceDirect](https://www.sciencedirect.com/science/article/abs/pii/S1062940822000833)

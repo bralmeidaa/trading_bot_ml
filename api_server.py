@@ -248,6 +248,76 @@ async def start_system():
         raise HTTPException(500, f"Failed to start system: {exc}")
 
 
+# ── Cross-sectional portfolio engine (Phase 3, paper) ───────────────────────
+portfolio_engine = None          # type: ignore
+portfolio_task: Optional[asyncio.Task] = None
+
+
+@app.post("/api/portfolio/start", tags=["Portfolio"],
+          summary="Start the daily cross-sectional momentum portfolio (paper)")
+async def start_portfolio():
+    """Launches the validated cross-sectional momentum engine (paper trading).
+    See docs/STRATEGY_THESIS.md. Market-neutral, daily rebalance, kill-switch."""
+    global portfolio_engine, portfolio_task
+    if portfolio_task and not portfolio_task.done():
+        raise HTTPException(400, "Portfolio engine already running")
+    try:
+        import ccxt
+        from backend.strategy.portfolio_engine import (
+            CrossSectionalPortfolioEngine, PortfolioConfig)
+        from backend.data.universe import EXPANDED_UNIVERSE
+        try:
+            from backend.persistence.repository import EquityRepository, DailyStatsRepository
+            eq_repo, daily_repo = EquityRepository(), DailyStatsRepository()
+        except Exception:
+            eq_repo = daily_repo = None
+        cfg = PortfolioConfig(universe=EXPANDED_UNIVERSE)   # validated defaults
+        exchange = await asyncio.to_thread(
+            lambda: ccxt.binance({"enableRateLimit": True}))
+        portfolio_engine = CrossSectionalPortfolioEngine(
+            cfg, exchange=exchange, equity_repo=eq_repo, daily_repo=daily_repo)
+        portfolio_task = asyncio.create_task(portfolio_engine.start())
+        return ok({"message": "Portfolio engine started (paper)",
+                   "universe": len(cfg.universe), "rebalance_days": cfg.rebalance_days})
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to start portfolio engine: {exc}")
+
+
+@app.post("/api/portfolio/stop", tags=["Portfolio"], summary="Stop the portfolio engine")
+async def stop_portfolio():
+    global portfolio_task, portfolio_engine
+    if not portfolio_task or portfolio_task.done():
+        raise HTTPException(400, "Portfolio engine not running")
+    if portfolio_engine:
+        portfolio_engine.state.halted = True
+    portfolio_task.cancel()
+    return ok({"message": "Portfolio engine stopped"})
+
+
+@app.get("/api/portfolio", tags=["Portfolio"],
+         summary="Current portfolio status, equity and positions")
+async def get_portfolio():
+    """Status of the cross-sectional portfolio engine."""
+    running = portfolio_task is not None and not portfolio_task.done()
+    if not portfolio_engine:
+        return ok({"running": False, "positions": [], "equity": 0.0,
+                   "total_pnl": 0.0, "daily_pnl": 0.0, "rebalances": 0, "halted": False})
+    e = portfolio_engine
+    return ok({
+        "running": running,
+        "halted": e.state.halted,
+        "equity": round(e.state.equity, 2),
+        "total_pnl": round(e.total_pnl, 2),
+        "daily_pnl": round(e.daily_pnl, 2),
+        "peak_equity": round(e.state.peak_equity, 2),
+        "rebalances": e.state.rebalances,
+        "positions": e.positions(),
+        "equity_curve": e.equity_curve[-100:],
+        "config": {"rebalance_days": e.config.rebalance_days, "lookback": e.config.lookback,
+                   "k": e.config.k, "mode": e.config.mode, "paper": e.config.paper_trading},
+    })
+
+
 @app.post(
     "/api/stop",
     tags=["System"],

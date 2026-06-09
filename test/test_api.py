@@ -253,6 +253,18 @@ class TestAnalyticsEndpoints:
         assert isinstance(data["categories"], list)
 
 
+class TestPortfolioEndpoints:
+    def test_portfolio_status_when_idle(self, api_client):
+        data = unwrap(api_client.get("/api/portfolio"))
+        assert data["running"] is False
+        assert data["positions"] == []
+        assert "total_pnl" in data
+
+    def test_portfolio_stop_when_idle_400(self, api_client):
+        r = api_client.post("/api/portfolio/stop")
+        assert r.status_code == 400
+
+
 class TestBacktestEndpoint:
     def test_backtest_trigger(self, api_client):
         data = unwrap(api_client.post("/api/backtest"))
