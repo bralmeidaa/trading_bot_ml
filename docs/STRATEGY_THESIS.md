@@ -33,25 +33,53 @@ rebalanceia demais → custo come o edge. Diário rebalanceia pouco → edge sob
 por que 1h falha e 1d passa, e bate com a literatura (momentum cross-sectional é fenômeno de
 horizonte de dias/semanas).
 
-## Ressalvas honestas (antes de confiar/automatizar)
+## Validação de robustez (feita)
 
-1. **Survivorship bias** — o universo são os majors de HOJE, que sobreviveram. Moedas que
-   quebraram não estão no painel. Isso infla retornos de momentum (vencedores que seguiram
-   vencendo). É a ressalva mais séria; idealmente validar com universo point-in-time.
-2. **Dependência de regime** — momentum em cripto brilha em mercados em tendência (2021-2024 teve
-   bull runs fortes). O filtro de regime (BTC EMA) ajuda e reduz drawdown, mas chop/bear vão doer.
-   Max DD ~28% já é alto.
-3. **Horizonte** — o edge é **diário/swing**, NÃO intraday. "Totalmente automatizado" e "cesta de
-   majors" seguem válidos; só o "intraday" precisa virar "diário" — os dados são inequívocos.
-4. **Short side** — market-neutral exige vender a descoberto (perp/margin), com custo e
-   funding próprios; a versão long-only (top-k) é alternativa mais simples.
+**1. Survivorship — CORRIGIDO e edge ficou MAIS FORTE.** Re-rodado com universo expandido (~35
+moedas, incluindo várias que despencaram mas ainda negociam) + **point-in-time** (a cada
+rebalance só entram moedas já listadas e líquidas naquela data, via filtro de volume trailing):
+
+| Versão | Sharpe | Ann. ret | Folds+ |
+|--------|--------|----------|--------|
+| Viesada (14 sobreviventes de hoje) | 1.67 | +94% | 4/4 |
+| **Corrigida (PIT, ~35 coins)** | **1.87** | **+124%** | **4/4** |
+
+Se fosse só viés, corrigir mataria o edge. Ele **aumentou** → o momentum é real, não artefato de
+escolher vencedores. (Melhor config: momentum, regime on, lookback 12d, rebalance 12d, k=3.)
+
+**2. Sensibilidade a custo — PASSOU** (custo é o assassino documentado do cross-sectional):
+
+| Custo/lado | Sharpe | Ann. ret | Folds+ |
+|-----------|--------|----------|--------|
+| 0.15% | 1.87 | +124% | 4/4 |
+| 0.25% | 1.75 | +112% | 4/4 |
+| 0.40% (conservador) | 1.58 | +95% | 4/4 |
+
+Aguenta custo alto porque rebalance a cada 12 dias = turnover baixo. Por isso funciona no diário
+e não no intraday (lá o turnover×custo mata).
+
+## Ressalvas remanescentes
+
+1. **Max drawdown ~32%** — é o risco real. Estratégia volátil; exige sizing conservador e o
+   filtro de regime (sem ele, DD chega a -60%). Gestão de risco de portfólio é obrigatória.
+2. **Survivorship residual** — moedas TOTALMENTE deslistadas (LUNA, FTT) somem da API da Binance e
+   não entram nem na versão corrigida. Reduzimos muito o viés, não 100%.
+3. **Horizonte é diário/swing, NÃO intraday.** "Automatizado" e "cesta" seguem válidos; só
+   "intraday" virou "diário" (hold ~12 dias). Os dados são inequívocos: 1h = NO-GO, 1d = GO.
+4. **Short side** — market-neutral exige short (perp/margin) com custo/funding próprios; long-only
+   (só top-k) é alternativa mais simples se o short for inviável.
 
 ## Veredito
 
-**GO condicional para cross-sectional momentum no DIÁRIO.** É o primeiro mecanismo com edge OOS
-consistente de todo o projeto. Antes de automatizar com dinheiro: (a) endereçar survivorship
-(universo point-in-time ou aceitar a ressalva), (b) validar em paper trading que bata com o
-backtest, (c) confirmar comportamento em janela de bear/chop.
+**GO para cross-sectional momentum no DIÁRIO.** Validado out-of-sample (4/4 folds, ~1200 dias),
+robusto a survivorship (edge fortaleceu ao corrigir) e a custo (até 0.40%/lado). É o primeiro
+mecanismo com edge real e consistente de todo o projeto.
+
+Config de referência: **momentum, regime BTC-EMA on, lookback 12d, rebalance 12d, long top-3 /
+short bottom-3, market-neutral**, universo ~15 mais líquidos por data.
+
+Antes de dinheiro real: (a) Fase 3 — engine de carteira automatizado; (b) paper trading que bata
+com o backtest; (c) atenção ao DD de 32% (sizing + kill-switch).
 
 ## Fontes
 - [Cross-Sectional Momentum in Crypto — Starkiller Capital](https://www.starkiller.capital/post/cross-sectional-momentum-in-cryptocurrency-markets)

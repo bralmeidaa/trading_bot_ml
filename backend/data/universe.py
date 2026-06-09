@@ -18,11 +18,23 @@ import ccxt
 import numpy as np
 import pandas as pd
 
-# ~15 liquid majors on Binance spot. Adjust as needed.
+# ~15 liquid majors on Binance spot.
 DEFAULT_UNIVERSE = [
     "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
     "ADA/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT", "MATIC/USDT",
     "LTC/USDT", "ATOM/USDT", "UNI/USDT", "AAVE/USDT", "NEAR/USDT",
+]
+
+# Expanded ~35-coin universe for survivorship-aware testing: includes many
+# coins that crashed hard but still trade (dilutes the "only winners" bias).
+# NOTE: fully delisted coins (LUNA, FTT) are gone from Binance's API — this
+# reduces but does not fully eliminate survivorship bias.
+EXPANDED_UNIVERSE = DEFAULT_UNIVERSE + [
+    "DOGE/USDT", "TRX/USDT", "ETC/USDT", "FIL/USDT", "ALGO/USDT",
+    "ICP/USDT", "APT/USDT", "ARB/USDT", "OP/USDT", "INJ/USDT",
+    "SAND/USDT", "MANA/USDT", "AXS/USDT", "GRT/USDT", "FTM/USDT",
+    "XLM/USDT", "VET/USDT", "THETA/USDT", "RUNE/USDT", "SUSHI/USDT",
+    "CRV/USDT", "COMP/USDT", "MKR/USDT", "SNX/USDT", "ZEC/USDT",
 ]
 
 _TF_MINUTES = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30,
@@ -81,12 +93,20 @@ def load_symbol(exchange, symbol: str, timeframe: str, days: int,
 
 def build_panel(symbols: Optional[List[str]] = None, timeframe: str = "1h",
                 days: int = 365, min_coverage: float = 0.95,
-                use_cache: bool = True, verbose: bool = True
+                use_cache: bool = True, verbose: bool = True,
+                point_in_time: bool = False, min_bars: int = 200
                 ) -> Tuple[pd.DataFrame, pd.DataFrame, List[str]]:
     """
-    Returns (close, volume, kept_symbols) where close/volume are wide DataFrames
-    indexed by timestamp (ms) with one column per symbol, aligned on the common
-    timeline. Symbols with < min_coverage of the max bar count are dropped.
+    Returns (close, volume, kept_symbols), wide DataFrames indexed by timestamp.
+
+    point_in_time=False (default): survivorship-enforcing — drops low-coverage
+      symbols and keeps only the dense common timeline (all symbols present).
+
+    point_in_time=True: survivorship-aware — keeps every symbol with >= min_bars
+      of data, aligned on the UNION of timestamps. A symbol is NaN before its
+      first listing and only forward-filled AFTER it starts trading (no backfill).
+      The strategy must then build the eligible universe per-bar from non-NaN
+      columns + liquidity, mimicking what was actually tradeable at each date.
     """
     symbols = symbols or DEFAULT_UNIVERSE
     exchange = ccxt.binance({"enableRateLimit": True, "rateLimit": 1200})
@@ -97,9 +117,9 @@ def build_panel(symbols: Optional[List[str]] = None, timeframe: str = "1h",
         if verbose:
             print(f"  loading {sym} {timeframe} {days}d...", end="", flush=True)
         df = load_symbol(exchange, sym, timeframe, days, use_cache=use_cache)
-        if df.empty or len(df) < 100:
+        if df.empty or len(df) < min_bars:
             if verbose:
-                print(" skip (no data)")
+                print(" skip (insufficient data)")
             continue
         closes[sym] = df.set_index("timestamp")["close"]
         vols[sym] = df.set_index("timestamp")["volume"]
@@ -112,15 +132,24 @@ def build_panel(symbols: Optional[List[str]] = None, timeframe: str = "1h",
     close = pd.DataFrame(closes).sort_index()
     volume = pd.DataFrame(vols).sort_index()
 
-    # Drop symbols with insufficient coverage, then forward-fill small gaps
-    max_bars = close.notna().sum().max()
-    keep = [c for c in close.columns if close[c].notna().sum() >= min_coverage * max_bars]
-    close = close[keep].ffill().dropna(how="any")
-    volume = volume[keep].reindex(close.index).ffill()
+    if not point_in_time:
+        # Survivorship-enforcing: dense common timeline
+        max_bars = close.notna().sum().max()
+        keep = [c for c in close.columns if close[c].notna().sum() >= min_coverage * max_bars]
+        close = close[keep].ffill().dropna(how="any")
+        volume = volume[keep].reindex(close.index).ffill()
+    else:
+        # Survivorship-aware: keep NaN before listing, ffill only after first valid
+        keep = list(close.columns)
+        close = close.ffill()       # forward-fill after first valid; NaN stays before listing
+        volume = volume.reindex(close.index)
+        # drop rows where even BTC isn't present yet (need a base timeline)
+        close = close.dropna(how="all")
+        volume = volume.reindex(close.index)
 
     if verbose:
-        print(f"  panel: {close.shape[0]:,} bars × {close.shape[1]} symbols "
-              f"(kept: {', '.join(keep)})")
+        mode = "PIT" if point_in_time else "dense"
+        print(f"  panel ({mode}): {close.shape[0]:,} bars × {close.shape[1]} symbols")
     return close, volume, keep
 
 

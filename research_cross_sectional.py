@@ -22,7 +22,7 @@ import argparse
 import numpy as np
 import pandas as pd
 
-from backend.data.universe import build_panel
+from backend.data.universe import build_panel, DEFAULT_UNIVERSE, EXPANDED_UNIVERSE
 
 # Cost per side as a fraction of notional traded (commission + slippage).
 COST_PER_SIDE = 0.0015   # 0.15% — conservative for majors
@@ -34,68 +34,66 @@ BARS_PER_YEAR = {"15m": 35040, "30m": 17520, "1h": 8760, "2h": 4380,
 
 def cross_sectional_returns(close: pd.DataFrame, lookback: int, rebalance: int,
                             k: int, mode: str, btc_filter: bool,
-                            cost: float = COST_PER_SIDE):
+                            cost: float = None,
+                            volume: pd.DataFrame = None, max_universe: int = 15):
     """
     Simulate a market-neutral cross-sectional portfolio.
 
-    At each rebalance bar t:
-      - rank symbols by signal over `lookback` bars
-        mode='momentum': signal = return over lookback (long winners, short losers)
-        mode='reversal': signal = -return over lookback (long losers, short winners)
-      - target weights: +1/k on top-k, -1/k on bottom-k (gross=2, net=0)
-      - hold until next rebalance; portfolio return = sum(w * forward bar returns)
-      - charge `cost` on the turnover (sum of |w_new - w_old|) at each rebalance
-      - optional BTC regime filter: only hold positions when BTC > its slow EMA
-
-    Returns a pd.Series of per-bar net portfolio returns indexed by close.index.
+    Point-in-time eligible universe at each rebalance bar t:
+      - symbol must have a non-NaN signal at t (i.e. it was listed >= lookback ago)
+      - among those, keep the top `max_universe` by trailing quote-volume
+        (close*volume mean over last ~30 bars) — mimics trading only what was
+        actually liquid AT THAT DATE (survivorship-aware).
+    Then rank within the eligible set:
+      momentum: long top-k (winners), short bottom-k (losers); reversal = inverse.
+      target weights +1/k on longs, -1/k on shorts (gross=2, net=0).
+    Cost charged on turnover at each rebalance. Optional BTC regime filter.
     """
+    if cost is None:
+        cost = COST_PER_SIDE
     rets = close.pct_change().fillna(0.0)
     n, m = close.shape
     if m < 2 * k + 1 or n < lookback + rebalance + 5:
         return pd.Series(dtype=float)
 
-    # signal = trailing return over lookback
     sig = close / close.shift(lookback) - 1.0
     if mode == "reversal":
         sig = -sig
 
-    # BTC regime: trade only when BTC above its slow EMA (trend-on)
+    # trailing quote-volume (USD-ish liquidity proxy) for point-in-time filter
+    if volume is not None:
+        qvol = (close * volume).rolling(30, min_periods=5).mean()
+    else:
+        qvol = None
+
     regime_on = pd.Series(True, index=close.index)
     if btc_filter and "BTC/USDT" in close.columns:
         btc = close["BTC/USDT"]
-        ema_fast = btc.ewm(span=max(2, lookback)).mean()
-        ema_slow = btc.ewm(span=max(4, lookback * 5)).mean()
-        regime_on = (ema_fast > ema_slow)
+        regime_on = (btc.ewm(span=max(2, lookback)).mean()
+                     > btc.ewm(span=max(4, lookback * 5)).mean())
 
     weights = pd.DataFrame(0.0, index=close.index, columns=close.columns)
     cur_w = pd.Series(0.0, index=close.columns)
     turnover = pd.Series(0.0, index=close.index)
 
-    rebal_idx = range(lookback, n, rebalance)
-    for t in rebal_idx:
-        ts = close.index[t]
-        if not regime_on.iloc[t]:
-            new_w = pd.Series(0.0, index=close.columns)
-        else:
+    for t in range(lookback, n, rebalance):
+        new_w = pd.Series(0.0, index=close.columns)
+        if regime_on.iloc[t]:
             s = sig.iloc[t].dropna()
-            if len(s) < 2 * k:
-                new_w = pd.Series(0.0, index=close.columns)
-            else:
+            # point-in-time liquidity cap: keep top max_universe by trailing qvol
+            if qvol is not None and len(s) > max_universe:
+                liq = qvol.iloc[t].reindex(s.index).dropna()
+                if len(liq) >= 2 * k:
+                    s = s.reindex(liq.sort_values().index[-max_universe:]).dropna()
+            if len(s) >= 2 * k:
                 ranked = s.sort_values()
-                longs = ranked.index[-k:]
-                shorts = ranked.index[:k]
-                new_w = pd.Series(0.0, index=close.columns)
-                new_w[longs] = 1.0 / k
-                new_w[shorts] = -1.0 / k
+                new_w[ranked.index[-k:]] = 1.0 / k     # longs (winners)
+                new_w[ranked.index[:k]] = -1.0 / k     # shorts (losers)
         turnover.iloc[t] = (new_w - cur_w).abs().sum()
         cur_w = new_w
-        # apply weights until next rebalance
-        end = min(t + rebalance, n)
-        weights.iloc[t:end] = new_w.values
+        weights.iloc[t:min(t + rebalance, n)] = new_w.values
 
-    # portfolio return per bar = sum_i w_i(t-1) * ret_i(t)
     port = (weights.shift(1).fillna(0.0) * rets).sum(axis=1)
-    # subtract cost on turnover at each rebalance bar
     port = port - turnover * cost
     return port
 
@@ -117,16 +115,19 @@ def metrics(port: pd.Series, timeframe: str) -> dict:
 
 
 def walk_forward(close: pd.DataFrame, timeframe: str, n_folds: int,
-                 lookback: int, rebalance: int, k: int, mode: str, btc_filter: bool):
+                 lookback: int, rebalance: int, k: int, mode: str, btc_filter: bool,
+                 volume: pd.DataFrame = None, max_universe: int = 15):
     """Run the strategy on each contiguous OOS fold; return per-fold + aggregate metrics."""
     n = len(close)
     fold_size = n // (n_folds + 1)
     fold_sharpes, all_port = [], []
     for f in range(1, n_folds + 1):
         seg = close.iloc[f * fold_size:(f + 1) * fold_size]
+        vseg = volume.iloc[f * fold_size:(f + 1) * fold_size] if volume is not None else None
         if len(seg) < lookback + rebalance + 5:
             continue
-        port = cross_sectional_returns(seg, lookback, rebalance, k, mode, btc_filter)
+        port = cross_sectional_returns(seg, lookback, rebalance, k, mode, btc_filter,
+                                       volume=vseg, max_universe=max_universe)
         if len(port):
             mtr = metrics(port, timeframe)
             fold_sharpes.append(mtr["sharpe"])
@@ -145,15 +146,28 @@ def main():
     ap.add_argument("--timeframe", default="1h")
     ap.add_argument("--days", type=int, default=365)
     ap.add_argument("--folds", type=int, default=4)
+    ap.add_argument("--pit", action="store_true",
+                    help="survivorship-aware: expanded universe + point-in-time eligibility")
+    ap.add_argument("--max-universe", type=int, default=15,
+                    help="liquidity cap: trade only top-N by trailing volume per bar")
+    ap.add_argument("--cost", type=float, default=None,
+                    help="override cost per side (fraction, e.g. 0.0025) for sensitivity")
     args = ap.parse_args()
 
+    global COST_PER_SIDE
+    if args.cost is not None:
+        COST_PER_SIDE = args.cost
+
     print("=" * 78)
+    mode_lbl = "PIT (survivorship-aware)" if args.pit else "dense (survivorship-biased)"
     print(f"CROSS-SECTIONAL RESEARCH — {args.timeframe}, {args.days}d, {args.folds} folds, "
-          f"cost {COST_PER_SIDE*100:.2f}%/side")
+          f"cost {COST_PER_SIDE*100:.2f}%/side | {mode_lbl}")
     print("=" * 78)
-    close, volume, kept = build_panel(timeframe=args.timeframe, days=args.days)
+    uni = EXPANDED_UNIVERSE if args.pit else DEFAULT_UNIVERSE
+    close, volume, kept = build_panel(symbols=uni, timeframe=args.timeframe,
+                                      days=args.days, point_in_time=args.pit)
     if close.shape[1] < 6:
-        print("Universe too small after coverage filter — aborting.")
+        print("Universe too small — aborting.")
         return
 
     # parameter grid (lookback & rebalance in BARS for this timeframe)
@@ -169,7 +183,8 @@ def main():
                 for rb in rebalances:
                     for k in ks:
                         agg = walk_forward(close, args.timeframe, args.folds,
-                                           lb, rb, k, mode, rf)
+                                           lb, rb, k, mode, rf,
+                                           volume=volume, max_universe=args.max_universe)
                         if agg:
                             rows.append((mode, rf, lb, rb, k, agg))
 
