@@ -729,6 +729,10 @@ class OptimizedSignalGenerator:
         self._retrain_counter = 0
         self._retrain_interval = 500  # retrain every 500 calls (~4h at 30s cadence)
 
+        # Minimum directional vote for _combine_signals to emit a signal.
+        # Lower = more trades (less selective). Tuned via tune_link.py.
+        self.min_vote = 0.3
+
         # Get optimized parameters
         self.params = self._get_optimized_params(symbol, timeframe)
     
@@ -1033,14 +1037,14 @@ class OptimizedSignalGenerator:
         confidence = weighted_conf_sum / active_weight if active_weight > 0 else 0.0
 
         # Decision logic
-        if long_vote > short_vote and long_vote > 0.3:
+        if long_vote > short_vote and long_vote > self.min_vote:
             return {
                 'direction': 1,
                 'strength': min(long_vote, 1.0),
                 'confidence': min(confidence, 0.95),
                 'metadata': metadata
             }
-        elif short_vote > long_vote and short_vote > 0.3:
+        elif short_vote > long_vote and short_vote > self.min_vote:
             return {
                 'direction': -1,
                 'strength': min(short_vote, 1.0),
