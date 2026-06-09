@@ -26,3 +26,4 @@ bt_run.log
 bt_aligned.json
 backtest_results.json
 tune_link.log
+research*.log
