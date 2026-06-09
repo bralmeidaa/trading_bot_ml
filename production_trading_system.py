@@ -1255,9 +1255,9 @@ def create_production_config() -> Tuple[GlobalConfig, List[BotConfig]]:
             take_profit_pct=0.035  # 3.5% take profit
         ),
         BotConfig(
-            symbol='LINK/USDT',
-            timeframe='1m',
-            capital_allocation=0.30,  # 30% para alta frequência (18.10% retorno)
+            symbol='BTC/USDT',   # par diferente do bot acima para não competir pela mesma posição
+            timeframe='5m',
+            capital_allocation=0.30,  # 30% do capital
             max_risk_per_trade=0.020,  # 2.0% risco por trade
             confidence_threshold=0.65,
             stop_loss_pct=0.015,  # 1.5% stop loss
