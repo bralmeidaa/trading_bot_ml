@@ -28,3 +28,4 @@ backtest_results.json
 tune_link.log
 research*.log
 research_feat.log
+backend/data/_cache/
