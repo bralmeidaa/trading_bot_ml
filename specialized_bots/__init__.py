@@ -1,1 +1,0 @@
-# Specialized Trading Bots Package

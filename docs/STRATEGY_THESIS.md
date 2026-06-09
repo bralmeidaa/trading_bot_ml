@@ -58,15 +58,31 @@ escolher vencedores. (Melhor config: momentum, regime on, lookback 12d, rebalanc
 Aguenta custo alto porque rebalance a cada 12 dias = turnover baixo. Por isso funciona no diário
 e não no intraday (lá o turnover×custo mata).
 
+## Robustez adicional (`.claude/research/robustness_cross_sectional.py`)
+
+Bateria de stress além do walk-forward base (janela contínua de ~1200d):
+- **Janelas de regime** (early/mid/late thirds): Sharpe 0.51–0.95 em TODAS, sempre positivo,
+  mas com DD alto (−32% a −45%). O edge persiste em sub-períodos, não é um único regime.
+- **Estabilidade de parâmetros**: só **3/12** combos (LB×RB) com Sharpe > 0.8 — o edge é um
+  **bolsão** em torno de LB12/RB6-12, não um platô largo. Lookbacks longos (24/48) degradam
+  com DD de −60% a −74%. Atenção: a config GO está num bom pocket, mas vizinhos são fracos.
+- **k (concentração)**: k=2 melhor (Sharpe 1.24) mas mais concentrado; k=5 enfraquece (0.73).
+- **Universo**: precisa de ≥15 nomes (max_universe=10 derruba pra 0.46).
+- **Filtro de regime**: corta o DD de −60.7% para −44.7% — confirmadamente essencial.
+
 ## Ressalvas remanescentes
 
-1. **Max drawdown ~32%** — é o risco real. Estratégia volátil; exige sizing conservador e o
-   filtro de regime (sem ele, DD chega a -60%). Gestão de risco de portfólio é obrigatória.
-2. **Survivorship residual** — moedas TOTALMENTE deslistadas (LUNA, FTT) somem da API da Binance e
+1. **Max drawdown REAL ~44%** numa janela contínua (o −32% era por fold; o número honesto
+   end-to-end é pior). Estratégia volátil; exige sizing conservador e o filtro de regime
+   (sem ele, DD vai a −60%). Gestão de risco de portfólio é obrigatória.
+2. **Sensibilidade a parâmetro** — edge concentrado num pocket (LB12/RB6-12). Não é robusto a
+   qualquer parametrização; cuidado com over-fitting na escolha. Walk-forward 4/4 dá conforto
+   pra config GO, mas não há platô largo.
+3. **Survivorship residual** — moedas TOTALMENTE deslistadas (LUNA, FTT) somem da API da Binance e
    não entram nem na versão corrigida. Reduzimos muito o viés, não 100%.
-3. **Horizonte é diário/swing, NÃO intraday.** "Automatizado" e "cesta" seguem válidos; só
+4. **Horizonte é diário/swing, NÃO intraday.** "Automatizado" e "cesta" seguem válidos; só
    "intraday" virou "diário" (hold ~12 dias). Os dados são inequívocos: 1h = NO-GO, 1d = GO.
-4. **Short side** — market-neutral exige short (perp/margin) com custo/funding próprios; long-only
+5. **Short side** — market-neutral exige short (perp/margin) com custo/funding próprios; long-only
    (só top-k) é alternativa mais simples se o short for inviável.
 
 ## Veredito

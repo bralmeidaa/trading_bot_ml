@@ -29,3 +29,6 @@ tune_link.log
 research*.log
 research_feat.log
 backend/data/_cache/
+test_run.log
+.claude/research/reports/
+.claude/research/__pycache__/

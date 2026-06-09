@@ -979,11 +979,13 @@ async def get_market_sentiment(symbol: str):
     summary="Trigger walk-forward backtest (runs in background)",
 )
 async def run_backtest_endpoint(background_tasks: BackgroundTasks):
-    """Starts run_backtest.py as a subprocess. Results appear in backtest_results.json."""
-    import subprocess, sys
+    """Starts the backtest as a subprocess. Results appear in backtest_results.json.
+    Validation scripts live in .claude/research/ (kept out of the app tree)."""
+    import subprocess, sys, os
+    script = os.path.join(".claude", "research", "run_backtest.py")
     def _run():
         subprocess.run(
-            [sys.executable, "run_backtest.py", "--days", "90", "--splits", "3",
+            [sys.executable, script, "--days", "90", "--splits", "3",
              "--output", "backtest_results.json"],
             capture_output=True,
         )
