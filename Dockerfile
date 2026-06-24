@@ -55,8 +55,11 @@ COPY --from=builder /app/frontend_react/dist ./frontend_react/dist
 # Copia apenas o código do backend necessário para rodar do estágio 'builder'
 COPY --from=builder /app /app
 
-# Cria o usuário não-root
-RUN useradd -m -u 1000 tradingbot && chown -R tradingbot:tradingbot /app
+# Cria o usuário não-root. Cria orderbook_data ANTES do chown para o named
+# volume montado ali herdar a posse de tradingbot (evita erro de escrita).
+RUN useradd -m -u 1000 tradingbot \
+    && mkdir -p /app/orderbook_data \
+    && chown -R tradingbot:tradingbot /app
 USER tradingbot
 
 ENV PYTHONPATH=/app

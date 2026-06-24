@@ -9,10 +9,16 @@ services:
       - PYTHONUNBUFFERED=1
       - BINANCE_API_KEY=${BINANCE_API_KEY:-}
       - BINANCE_API_SECRET=${BINANCE_API_SECRET:-}
-        #volumes:
-      #  - trading-bot-logs:/app/logs
-        #  - trading-bot-data:/app/data
-        #  - trading-bot-config:/app/config
+      # Auto-launch on boot (set to 0 to disable). Collector accumulates order
+      # book history; portfolio runs the validated daily cross-sectional engine.
+      - AUTOSTART_COLLECTOR=${AUTOSTART_COLLECTOR:-1}
+      - AUTOSTART_PORTFOLIO=${AUTOSTART_PORTFOLIO:-1}
+      - COLLECTOR_INTERVAL_SEC=${COLLECTOR_INTERVAL_SEC:-60}
+      - COLLECTOR_DIR=/app/orderbook_data
+    volumes:
+      # Persist collected order book history across redeploys (the whole point —
+      # we're accumulating proprietary L2 history over weeks/months).
+      - trading-bot-orderbook:/app/orderbook_data
     restart: unless-stopped
     deploy:
       resources:
@@ -81,6 +87,7 @@ services:
 
 volumes:
   redis_data:
+  trading-bot-orderbook:
 
 networks:
   trading-network:

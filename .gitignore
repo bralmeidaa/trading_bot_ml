@@ -33,3 +33,4 @@ test_run.log
 .claude/research/reports/
 .claude/research/__pycache__/
 intraday_sweep.log
+orderbook_data/

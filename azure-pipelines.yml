@@ -228,7 +228,10 @@ stages:
                 
                 if [ $response -eq 200 ]; then
                   echo "✅ Dashboard is accessible"
-                  curl -X POST http://localhost:12000/start || true
+                  # The app auto-starts collector + portfolio on boot (startup hook).
+                  # These explicit calls are belt-and-suspenders (idempotent).
+                  curl -fsS -X POST http://localhost:12000/api/collector/start || true
+                  curl -fsS -X POST http://localhost:12000/api/portfolio/start || true
                 else
                   echo "❌ Dashboard is not accessible (HTTP $response)"
                   exit 1

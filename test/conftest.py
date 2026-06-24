@@ -8,6 +8,10 @@ from datetime import datetime, timedelta
 # Use in-memory SQLite for all DB tests
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
+# Never auto-launch the collector / portfolio engine (network) during tests.
+os.environ["AUTOSTART_COLLECTOR"] = "0"
+os.environ["AUTOSTART_PORTFOLIO"] = "0"
+
 
 def _make_ohlcv(n: int = 500, seed: int = 42, trend: float = 0.0001) -> pd.DataFrame:
     """Return a synthetic OHLCV DataFrame with controllable trend."""

@@ -318,6 +318,75 @@ async def get_portfolio():
     })
 
 
+# ── Order book collector (parallel data-accumulation track) ─────────────────
+orderbook_collector = None       # type: ignore
+collector_task: Optional[asyncio.Task] = None
+
+
+async def _launch_collector():
+    """Start the order book collector (idempotent). Returns a status message."""
+    global orderbook_collector, collector_task
+    if collector_task and not collector_task.done():
+        return "collector already running"
+    import ccxt
+    from backend.data.orderbook_collector import OrderBookCollector
+    from backend.data.universe import EXPANDED_UNIVERSE
+    interval = int(os.getenv("COLLECTOR_INTERVAL_SEC", "60"))
+    storage = os.getenv("COLLECTOR_DIR", "orderbook_data")
+    exchange = await asyncio.to_thread(lambda: ccxt.binance({"enableRateLimit": True}))
+    orderbook_collector = OrderBookCollector(
+        EXPANDED_UNIVERSE, exchange=exchange, interval_sec=interval, storage_dir=storage)
+    collector_task = asyncio.create_task(orderbook_collector.start())
+    return f"collector started ({len(EXPANDED_UNIVERSE)} symbols, every {interval}s)"
+
+
+@app.post("/api/collector/start", tags=["Collector"],
+          summary="Start the live order book collector")
+async def start_collector():
+    try:
+        return ok({"message": await _launch_collector()})
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to start collector: {exc}")
+
+
+@app.post("/api/collector/stop", tags=["Collector"], summary="Stop the collector")
+async def stop_collector():
+    global collector_task, orderbook_collector
+    if not collector_task or collector_task.done():
+        raise HTTPException(400, "Collector not running")
+    if orderbook_collector:
+        orderbook_collector.halted = True
+    collector_task.cancel()
+    return ok({"message": "Collector stopped"})
+
+
+@app.get("/api/collector", tags=["Collector"], summary="Collector status")
+async def get_collector():
+    running = collector_task is not None and not collector_task.done()
+    if not orderbook_collector:
+        return ok({"running": False, "snapshots_written": 0})
+    return ok({**orderbook_collector.status(), "running": running})
+
+
+@app.on_event("startup")
+async def _autostart():
+    """Auto-launch the collector and portfolio engine on service boot.
+    Controlled by env: AUTOSTART_COLLECTOR / AUTOSTART_PORTFOLIO (default '1').
+    Each wrapped so one failure never blocks the API from coming up."""
+    if os.getenv("AUTOSTART_COLLECTOR", "1") != "0":
+        try:
+            msg = await _launch_collector()
+            logger.info(f"autostart: {msg}")
+        except Exception as exc:
+            logger.warning(f"autostart collector failed: {exc}")
+    if os.getenv("AUTOSTART_PORTFOLIO", "1") != "0":
+        try:
+            await start_portfolio()
+            logger.info("autostart: portfolio engine started")
+        except Exception as exc:
+            logger.warning(f"autostart portfolio failed: {exc}")
+
+
 @app.post(
     "/api/stop",
     tags=["System"],

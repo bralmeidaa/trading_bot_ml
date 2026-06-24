@@ -265,6 +265,16 @@ class TestPortfolioEndpoints:
         assert r.status_code == 400
 
 
+class TestCollectorEndpoints:
+    def test_collector_status_idle(self, api_client):
+        data = unwrap(api_client.get("/api/collector"))
+        assert data["running"] is False
+
+    def test_collector_stop_idle_400(self, api_client):
+        r = api_client.post("/api/collector/stop")
+        assert r.status_code == 400
+
+
 class TestBacktestEndpoint:
     def test_backtest_trigger(self, api_client):
         data = unwrap(api_client.post("/api/backtest"))
