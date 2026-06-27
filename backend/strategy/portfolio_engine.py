@@ -45,7 +45,7 @@ class PortfolioConfig:
     cost_per_side: float = DEFAULT_COST_PER_SIDE
     max_drawdown_kill: float = 0.35   # halt if drawdown exceeds this
     mark_interval_sec: int = 3600     # mark-to-market cadence (live loop)
-    history_days: int = 120           # history window to fetch for the signal
+    history_days: int = 200           # history window to fetch (> build_panel min_bars)
     paper_trading: bool = True
 
 
@@ -215,10 +215,13 @@ class CrossSectionalPortfolioEngine:
     def _fetch_panel(self):
         try:
             from backend.data.universe import build_panel
+            # min_bars must be small enough for the live window (history_days of
+            # DAILY bars) — the build_panel default (200) would drop every symbol.
             close, volume, _ = build_panel(
                 symbols=self.config.universe, timeframe=self.config.timeframe,
                 days=self.config.history_days, point_in_time=True,
-                use_cache=False, verbose=False)
+                use_cache=False, verbose=False,
+                min_bars=max(self.config.lookback * 4, 60))
             return close, volume
         except Exception as exc:
             logger.error(f"Panel fetch failed: {exc}")

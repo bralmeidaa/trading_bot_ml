@@ -97,6 +97,17 @@ class TestRebalanceCost:
         assert eng.state.equity == pytest.approx(eq)
 
 
+class TestConfigSanity:
+    def test_history_days_exceeds_build_panel_min_bars(self):
+        """Regression: history_days must be > build_panel's default min_bars (200),
+        else every symbol is dropped and the panel comes back empty (0 rebalances)."""
+        from backend.data.universe import build_panel
+        import inspect
+        default_min_bars = inspect.signature(build_panel).parameters["min_bars"].default
+        cfg = PortfolioConfig(universe=SYMS)
+        assert cfg.history_days >= default_min_bars
+
+
 class TestKillSwitch:
     def test_trips_on_drawdown(self):
         eng = _engine(max_drawdown_kill=0.20)

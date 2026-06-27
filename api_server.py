@@ -267,7 +267,9 @@ async def start_portfolio():
             CrossSectionalPortfolioEngine, PortfolioConfig)
         from backend.data.universe import EXPANDED_UNIVERSE
         try:
+            from backend.persistence.database import init_db
             from backend.persistence.repository import EquityRepository, DailyStatsRepository
+            init_db()   # create tables (equity_snapshots, etc.) — idempotent
             eq_repo, daily_repo = EquityRepository(), DailyStatsRepository()
         except Exception:
             eq_repo = daily_repo = None
