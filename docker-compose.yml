@@ -16,9 +16,11 @@ services:
       - COLLECTOR_INTERVAL_SEC=${COLLECTOR_INTERVAL_SEC:-60}
       - COLLECTOR_DIR=/app/orderbook_data
     volumes:
-      # Persist collected order book history across redeploys (the whole point —
-      # we're accumulating proprietary L2 history over weeks/months).
-      - trading-bot-orderbook:/app/orderbook_data
+      # Persist collected order book history across redeploys. HOST BIND MOUNT
+      # (not a Docker volume) so it survives the CI/CD's aggressive
+      # `down -v` + `system prune --volumes` cleanup. Host dir owned by ubuntu
+      # (uid 1000) = tradingbot in the container → writable.
+      - ./orderbook_data:/app/orderbook_data
     restart: unless-stopped
     deploy:
       resources:
@@ -87,7 +89,6 @@ services:
 
 volumes:
   redis_data:
-  trading-bot-orderbook:
 
 networks:
   trading-network:
