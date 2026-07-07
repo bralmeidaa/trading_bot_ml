@@ -16,11 +16,13 @@ services:
       - COLLECTOR_INTERVAL_SEC=${COLLECTOR_INTERVAL_SEC:-60}
       - COLLECTOR_DIR=/app/orderbook_data
     volumes:
-      # Persist collected order book history across redeploys. HOST BIND MOUNT
-      # (not a Docker volume) so it survives the CI/CD's aggressive
-      # `down -v` + `system prune --volumes` cleanup. Host dir owned by ubuntu
-      # (uid 1000) = tradingbot in the container → writable.
-      - ./orderbook_data:/app/orderbook_data
+      # Persist collected order book history across redeploys. HOST BIND MOUNT to
+      # an ABSOLUTE path OUTSIDE the deploy dir (/opt/trading-bot-ml) AND outside
+      # Docker volumes, so it survives ALL of the CI/CD's destructive steps:
+      # `rm -rf /opt/trading-bot-ml/*`, `down -v`, and `system prune --volumes`.
+      # Host dir is chowned to uid:gid 1000:1000 (= tradingbot in the container;
+      # note the host `ubuntu` user is 1001, NOT 1000) so the collector can write.
+      - /opt/trading-bot-data/orderbook_data:/app/orderbook_data
     restart: unless-stopped
     deploy:
       resources:

@@ -184,8 +184,9 @@ stages:
                 echo "🔄 Pulling latest images..."
                 docker compose pull
 
-                echo "📁 Ensuring host data dir exists (bind mount for order book history)..."
-                mkdir -p orderbook_data
+                echo "📁 Ensuring persistent host data dir (outside deploy dir & volumes, owned by container uid 1000)..."
+                sudo mkdir -p /opt/trading-bot-data/orderbook_data
+                sudo chown -R 1000:1000 /opt/trading-bot-data
 
                 echo "🚀 Starting new containers with fresh images..."
                 docker compose up -d --force-recreate --remove-orphans
