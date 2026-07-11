@@ -15,6 +15,10 @@ services:
       - AUTOSTART_PORTFOLIO=${AUTOSTART_PORTFOLIO:-1}
       - COLLECTOR_INTERVAL_SEC=${COLLECTOR_INTERVAL_SEC:-60}
       - COLLECTOR_DIR=/app/orderbook_data
+      # Paper-trading DB on the SAME persistent host mount as the order book, so
+      # equity/trades/stats survive redeploys (default ./trading_bot.db lived in
+      # the container layer = wiped every deploy). 4 slashes = absolute path.
+      - DATABASE_URL=${DATABASE_URL:-sqlite:////app/data/trading_bot.db}
     volumes:
       # Persist collected order book history across redeploys. HOST BIND MOUNT to
       # an ABSOLUTE path OUTSIDE the deploy dir (/opt/trading-bot-ml) AND outside
@@ -23,6 +27,8 @@ services:
       # Host dir is chowned to uid:gid 1000:1000 (= tradingbot in the container;
       # note the host `ubuntu` user is 1001, NOT 1000) so the collector can write.
       - /opt/trading-bot-data/orderbook_data:/app/orderbook_data
+      # Paper-trading SQLite DB (+ its -wal/-shm) on the same persistent mount.
+      - /opt/trading-bot-data/db:/app/data
     restart: unless-stopped
     deploy:
       resources:

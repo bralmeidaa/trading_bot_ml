@@ -184,8 +184,8 @@ stages:
                 echo "🔄 Pulling latest images..."
                 docker compose pull
 
-                echo "📁 Ensuring persistent host data dir (outside deploy dir & volumes, owned by container uid 1000)..."
-                sudo mkdir -p /opt/trading-bot-data/orderbook_data
+                echo "📁 Ensuring persistent host data dirs (outside deploy dir & volumes, owned by container uid 1000)..."
+                sudo mkdir -p /opt/trading-bot-data/orderbook_data /opt/trading-bot-data/db
                 sudo chown -R 1000:1000 /opt/trading-bot-data
 
                 echo "🚀 Starting new containers with fresh images..."
