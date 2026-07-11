@@ -24,7 +24,9 @@ import subprocess
 import numpy as np
 import pandas as pd
 
-from backend.data.microstructure import decay_correlations, forward_return, threshold_backtest
+from backend.data.microstructure import (
+    decay_correlations, forward_return, threshold_backtest, maker_viability,
+)
 
 CACHE = os.path.join(os.path.dirname(__file__), "_obcache")
 REPORT_DIR = os.path.join(os.path.dirname(__file__), "reports")
@@ -117,6 +119,27 @@ def main():
             if r3["net_bps"] > 0:
                 best.append((sym, q, r3, per_day))
 
+    # ---- execution viability (spread vs signal) ----
+    out("\n## 3. Viabilidade de execução — o sinal bruto paga algum custo real?\n")
+    out("taker_floor = spread + 2×fee/lado (2bps). maker_capture(otim.) = meio-spread")
+    out("(ignora seleção adversa → limite SUPERIOR otimista). Sinal = bruto h1 p95.\n")
+    out("| símbolo | spread_med(bps) | meio-spread | taker_floor | grossH1_p95 | > taker? | > maker(otim)? |")
+    out("|---|---|---|---|---|---|---|")
+    any_viable = False
+    for sym in SYMBOLS:
+        s = df[df.symbol == sym].sort_values("timestamp").reset_index(drop=True)
+        if len(s) < 500:
+            continue
+        imb = s["imbalance_top20"]; fwd = forward_return(s["mid"], 1)
+        r = threshold_backtest(imb, fwd, 0.95, 0)
+        gross = r["gross_bps"] if r else float("nan")
+        v = maker_viability(s["spread_bps"], gross)
+        any_viable = any_viable or v["beats_taker"]
+        out(f"| {sym} | {v['spread_med_bps']:.2f} | {v['half_spread_bps']:.2f} | "
+            f"{v['taker_floor_bps']:.2f} | {gross:+.2f} | "
+            f"{'SIM' if v['beats_taker'] else 'não'} | "
+            f"{'SIM' if v['beats_maker_optimistic'] else 'não'} |")
+
     # ---- verdict ----
     out("\n## Veredito\n")
     if best:
@@ -126,9 +149,16 @@ def main():
                 f"{pd_:+.2f}bps/dia, WR {r['win_rate']:.0%}, n={r['n']}")
         out("\n→ Há sinal que paga o custo em ALGUM threshold — investigar HF/execução com cuidado.")
     else:
-        out("Nenhum threshold dá NET positivo a 3bps de custo. O sinal (bruto ~0.4-0.7bps) é")
-        out("real mas < custo mesmo filtrando extremos → cadência de 60s não basta; edge de")
-        out("order flow é sub-segundo (HF/latência). Confirma o primeiro olhar.")
+        out("Nenhum threshold dá NET positivo a 3bps. O sinal é REAL (corr imbalance→retorno")
+        out("+0.10–0.12 nos majors em h1) e mais forte que o primeiro olhar — mas nenhuma")
+        out("execução acessível paga:")
+        out("- **Taker**: o floor (spread + fees) fica em ~4bps+ e o sinal bruto p95 é ~0.5–2bps.")
+        out("- **Maker**: nos nomes com sinal forte (BTC/ETH/BNB) o spread já é ~0 → nada a")
+        out("  capturar, e ainda haveria seleção adversa. Nos alts de spread largo o sinal é fraco.")
+        if not any_viable:
+            out("\nNENHUM símbolo bate o taker_floor (seção 3) → confirmado por dois ângulos")
+            out("independentes (threshold líquido E spread vs sinal). O edge de order flow a 60s")
+            out("não é acessível; é território sub-segundo/HF. NO-GO honesto.")
 
     os.makedirs(REPORT_DIR, exist_ok=True)
     path = os.path.join(REPORT_DIR, "microstructure_report.md")

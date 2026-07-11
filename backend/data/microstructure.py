@@ -35,6 +35,31 @@ def decay_correlations(df_sym: pd.DataFrame, horizons, signal_col: str = "imbala
     return out
 
 
+def maker_viability(spread_bps: pd.Series, gross_bps: float,
+                    taker_fee_bps_side: float = 2.0) -> dict:
+    """
+    Assess whether the h1 gross signal is capturable by any execution style.
+
+    - taker floor = full spread + round-trip fees (2 * per-side fee): what a
+      market order pays. Signal is viable as taker only if gross > this.
+    - maker capture = half the spread you could EARN by posting passively. On a
+      near-zero-spread name there is nothing to capture; on a wide-spread name
+      you might, but you eat adverse selection (not modeled — so this is an
+      OPTIMISTIC upper bound on the maker case).
+    Returns the numbers so the caller can render an honest verdict.
+    """
+    med = float(spread_bps.median())
+    taker_floor = med + 2.0 * taker_fee_bps_side
+    return {
+        "spread_med_bps": med,
+        "half_spread_bps": med / 2.0,
+        "taker_floor_bps": taker_floor,
+        "gross_bps": float(gross_bps),
+        "beats_taker": bool(gross_bps > taker_floor),
+        "beats_maker_optimistic": bool(gross_bps > 0 and gross_bps > med / 2.0),
+    }
+
+
 def threshold_backtest(imbalance: pd.Series, fwd: pd.Series,
                        quantile: float, cost_bps: float) -> dict | None:
     """
