@@ -66,7 +66,7 @@ def simulate(close: pd.DataFrame, lookback: int, rebalance: int, k: int,
     return series. No look-ahead: weights set at rebalance bar t use signal at t,
     portfolio return at t+1 uses weights from t (shift).
     """
-    rets = close.pct_change().fillna(0.0)
+    rets = close.pct_change(fill_method=None).fillna(0.0)
     n, m = close.shape
     if m < 2 * k + 1 or n < lookback + rebalance + 5:
         return pd.Series(dtype=float)
