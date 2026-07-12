@@ -19,6 +19,16 @@ services:
       # equity/trades/stats survive redeploys (default ./trading_bot.db lived in
       # the container layer = wiped every deploy). 4 slashes = absolute path.
       - DATABASE_URL=${DATABASE_URL:-sqlite:////app/data/trading_bot.db}
+      # Daily BTC-regime email alert (heartbeat + flip). No-ops until SMTP is set.
+      # Set SMTP_* / ALERT_TO via the pipeline .env (Gmail/Outlook app password).
+      - AUTOSTART_REGIME_ALERT=${AUTOSTART_REGIME_ALERT:-1}
+      - REGIME_ALERT_HOUR=${REGIME_ALERT_HOUR:-12}
+      - REGIME_STATE_PATH=/app/data/regime_state.json
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - ALERT_TO=${ALERT_TO:-}
     volumes:
       # Persist collected order book history across redeploys. HOST BIND MOUNT to
       # an ABSOLUTE path OUTSIDE the deploy dir (/opt/trading-bot-ml) AND outside

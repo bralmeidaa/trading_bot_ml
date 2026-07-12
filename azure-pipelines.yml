@@ -15,15 +15,26 @@ pool:
   name: 'trading-bot-ml-vm'
 
 variables:
+  # Link the variable group so its vars (SMTP_HOST/USER/PASS, ALERT_TO, etc.)
+  # resolve as $(VAR) in this pipeline. Required for the regime email alert.
+  - group: trading-bot-vg
   # Azure DevOps Variables (set in pipeline variables)
-  deploymentPath: '/opt/trading-bot-ml'
-  registryUrl: 'docker.io'
-  imageRepository: 'bralmeida/trading-bot-ml'
-  dockerImageTag: '$(Build.BuildId)'
-  dockerImageLatestTag: 'latest'
-  dockerImageCacheTag: 'cache'
-  dockerfilePath: './Dockerfile'
-  fullchain_serverCertificatePath: '$(System.DefaultWorkingDirectory)/fullchain_serverCertificate.crt'
+  - name: deploymentPath
+    value: '/opt/trading-bot-ml'
+  - name: registryUrl
+    value: 'docker.io'
+  - name: imageRepository
+    value: 'bralmeida/trading-bot-ml'
+  - name: dockerImageTag
+    value: '$(Build.BuildId)'
+  - name: dockerImageLatestTag
+    value: 'latest'
+  - name: dockerImageCacheTag
+    value: 'cache'
+  - name: dockerfilePath
+    value: './Dockerfile'
+  - name: fullchain_serverCertificatePath
+    value: '$(System.DefaultWorkingDirectory)/fullchain_serverCertificate.crt'
 
 stages:
 - stage: Build
@@ -168,6 +179,11 @@ stages:
                 BINANCE_API_SECRET=$(BINANCE_API_SECRET)
                 ENVIRONMENT=production
                 BUILD_ID=$(dockerImageLatestTag)
+                SMTP_HOST=$(SMTP_HOST)
+                SMTP_PORT=$(SMTP_PORT)
+                SMTP_USER=$(SMTP_USER)
+                SMTP_PASS=$(SMTP_PASS)
+                ALERT_TO=$(ALERT_TO)
                 EOL
 
                 #Check .env creation

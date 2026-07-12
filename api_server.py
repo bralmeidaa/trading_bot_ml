@@ -371,11 +371,77 @@ async def get_collector():
     return ok({**orderbook_collector.status(), "running": running})
 
 
+# ── BTC-regime daily email alert ────────────────────────────────────────────
+regime_alert_task: Optional[asyncio.Task] = None
+
+
+def _portfolio_snapshot_for_alert() -> Optional[dict]:
+    e = portfolio_engine
+    if not e:
+        return None
+    return {"equity": round(e.state.equity, 2), "positions": e.positions(),
+            "rebalances": e.state.rebalances, "config": {"exposure": e.config.exposure}}
+
+
+def _fetch_btc_close():
+    from backend.data.universe import build_panel
+    close, _, _ = build_panel(symbols=["BTC/USDT"], timeframe="1d", days=200,
+                              point_in_time=False, use_cache=False, verbose=False)
+    return close
+
+
+def _run_regime_alert(force: bool = False) -> dict:
+    """Blocking: fetch BTC, run the alert (send if SMTP set), persist state."""
+    from backend.alerts.regime_alert import run_once
+    close = _fetch_btc_close()
+    if close is None or close.empty:
+        return {"error": "no BTC data", "smtp_configured": False}
+    return run_once(close, _portfolio_snapshot_for_alert(), force=force)
+
+
+@app.get("/api/regime", tags=["Portfolio"], summary="Current BTC regime state")
+async def get_regime():
+    """Current regime (ON/OFF), BTC EMA gap, and whether the daily alert is armed."""
+    from backend.alerts.regime_alert import regime_snapshot, smtp_config_from_env
+    close = await asyncio.to_thread(_fetch_btc_close)
+    if close is None or close.empty:
+        raise HTTPException(503, "BTC data unavailable")
+    snap = regime_snapshot(close)
+    return ok({**snap, "smtp_configured": smtp_config_from_env() is not None,
+               "alert_running": regime_alert_task is not None and not regime_alert_task.done()})
+
+
+@app.post("/api/regime/test", tags=["Portfolio"], summary="Send a test regime email now")
+async def test_regime_alert():
+    """Force-send the regime email immediately (to verify SMTP delivery)."""
+    res = await asyncio.to_thread(_run_regime_alert, True)
+    if not res.get("smtp_configured"):
+        raise HTTPException(400, "SMTP não configurado (defina SMTP_HOST/SMTP_USER/SMTP_PASS/ALERT_TO)")
+    return ok(res)
+
+
+async def _regime_alert_loop():
+    """Daily regime email at REGIME_ALERT_HOUR (UTC); also fires on flips."""
+    hour = int(os.getenv("REGIME_ALERT_HOUR", "12"))
+    while True:
+        now = datetime.utcnow()
+        target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        await asyncio.sleep(max(60, (target - now).total_seconds()))
+        try:
+            res = await asyncio.to_thread(_run_regime_alert, False)
+            logger.info(f"regime alert: {res.get('subject')} (sent={res.get('sent')})")
+        except Exception as exc:
+            logger.warning(f"regime alert loop error: {exc}")
+
+
 @app.on_event("startup")
 async def _autostart():
-    """Auto-launch the collector and portfolio engine on service boot.
-    Controlled by env: AUTOSTART_COLLECTOR / AUTOSTART_PORTFOLIO (default '1').
-    Each wrapped so one failure never blocks the API from coming up."""
+    """Auto-launch the collector, portfolio engine and regime alert on service boot.
+    Controlled by env: AUTOSTART_COLLECTOR / AUTOSTART_PORTFOLIO / AUTOSTART_REGIME_ALERT
+    (default '1'). Each wrapped so one failure never blocks the API from coming up."""
+    global regime_alert_task
     if os.getenv("AUTOSTART_COLLECTOR", "1") != "0":
         try:
             msg = await _launch_collector()
@@ -388,6 +454,12 @@ async def _autostart():
             logger.info("autostart: portfolio engine started")
         except Exception as exc:
             logger.warning(f"autostart portfolio failed: {exc}")
+    if os.getenv("AUTOSTART_REGIME_ALERT", "1") != "0":
+        try:
+            regime_alert_task = asyncio.create_task(_regime_alert_loop())
+            logger.info("autostart: regime alert loop started")
+        except Exception as exc:
+            logger.warning(f"autostart regime alert failed: {exc}")
 
 
 @app.post(
