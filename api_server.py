@@ -316,7 +316,8 @@ async def get_portfolio():
         "positions": e.positions(),
         "equity_curve": e.equity_curve[-100:],
         "config": {"rebalance_days": e.config.rebalance_days, "lookback": e.config.lookback,
-                   "k": e.config.k, "mode": e.config.mode, "paper": e.config.paper_trading},
+                   "k": e.config.k, "mode": e.config.mode, "exposure": e.config.exposure,
+                   "max_drawdown_kill": e.config.max_drawdown_kill, "paper": e.config.paper_trading},
     })
 
 

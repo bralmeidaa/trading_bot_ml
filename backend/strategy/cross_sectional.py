@@ -57,14 +57,38 @@ def btc_regime(close: pd.DataFrame, lookback: int) -> pd.Series:
     return btc.ewm(span=max(2, lookback)).mean() > btc.ewm(span=max(4, lookback * 5)).mean()
 
 
+def realized_vol(port: pd.Series, lookback: int = 30, bpy: int = 365) -> pd.Series:
+    """Trailing annualized volatility of a per-bar return series."""
+    return port.rolling(lookback, min_periods=max(5, lookback // 3)).std() * np.sqrt(bpy)
+
+
+def vol_target_scale(port: pd.Series, target_vol: float, lookback: int = 30,
+                     max_lev: float = 1.5) -> pd.Series:
+    """
+    Exposure multiplier that scales a strategy toward a target annualized vol:
+    scale = clip(target_vol / trailing_realized_vol, 0, max_lev). Principled risk
+    overlay — does NOT touch the signal, only de-/re-levers. Returns the raw
+    (unlagged) per-bar scale; callers must lag it (use vol known at decision time).
+    """
+    rv = realized_vol(port, lookback)
+    return (target_vol / rv).clip(0.0, max_lev).replace([np.inf, -np.inf], 0.0).fillna(0.0)
+
+
 def simulate(close: pd.DataFrame, lookback: int, rebalance: int, k: int,
              mode: str = "momentum", btc_filter: bool = True,
              cost: float = DEFAULT_COST_PER_SIDE, volume: pd.DataFrame = None,
-             max_universe: int = 15) -> pd.Series:
+             max_universe: int = 15, target_vol: float | None = None,
+             vol_lookback: int = 30, max_lev: float = 1.5) -> pd.Series:
     """
     Simulate the market-neutral cross-sectional portfolio. Returns per-bar net
     return series. No look-ahead: weights set at rebalance bar t use signal at t,
     portfolio return at t+1 uses weights from t (shift).
+
+    target_vol (annualized, e.g. 0.10): if set, applies a volatility-targeting
+    overlay — a DAILY exposure scale clip(target_vol/trailing_vol, 0, max_lev) is
+    folded into the weights and P&L + turnover are recomputed honestly (the daily
+    re-scaling cost is charged). Reacts next-day (not just at rebalance), which is
+    what actually controls drawdown. None = full exposure (unchanged).
     """
     rets = close.pct_change(fill_method=None).fillna(0.0)
     n, m = close.shape
@@ -90,7 +114,18 @@ def simulate(close: pd.DataFrame, lookback: int, rebalance: int, k: int,
         weights.iloc[t:min(t + rebalance, n)] = new_w.values
 
     port = (weights.shift(1).fillna(0.0) * rets).sum(axis=1)
-    return port - turnover * cost
+    port = port - turnover * cost
+    if not target_vol:
+        return port
+
+    # Vol-target overlay: a DAILY exposure scale (from the base strategy's trailing
+    # vol, lagged → no look-ahead) is folded into the weights; P&L and turnover are
+    # recomputed so the daily re-scaling cost is charged honestly.
+    scale = vol_target_scale(port, target_vol, vol_lookback, max_lev).shift(1).fillna(0.0)
+    sw = weights.mul(scale, axis=0)
+    sw_turnover = sw.diff().abs().sum(axis=1)
+    sw_turnover.iloc[0] = sw.iloc[0].abs().sum()
+    return (sw.shift(1).fillna(0.0) * rets).sum(axis=1) - sw_turnover * cost
 
 
 def metrics(port: pd.Series, timeframe: str = "1d") -> dict:
@@ -111,7 +146,7 @@ def metrics(port: pd.Series, timeframe: str = "1d") -> dict:
 def walk_forward(close: pd.DataFrame, timeframe: str, n_folds: int, lookback: int,
                  rebalance: int, k: int, mode: str = "momentum", btc_filter: bool = True,
                  cost: float = DEFAULT_COST_PER_SIDE, volume: pd.DataFrame = None,
-                 max_universe: int = 15) -> dict | None:
+                 max_universe: int = 15, target_vol: float | None = None) -> dict | None:
     """Out-of-sample walk-forward over contiguous folds; aggregate + per-fold Sharpe."""
     n = len(close)
     fold = n // (n_folds + 1)
@@ -121,7 +156,8 @@ def walk_forward(close: pd.DataFrame, timeframe: str, n_folds: int, lookback: in
         vseg = volume.iloc[f * fold:(f + 1) * fold] if volume is not None else None
         if len(seg) < lookback + rebalance + 5:
             continue
-        p = simulate(seg, lookback, rebalance, k, mode, btc_filter, cost, vseg, max_universe)
+        p = simulate(seg, lookback, rebalance, k, mode, btc_filter, cost, vseg,
+                     max_universe, target_vol=target_vol)
         if len(p):
             sharpes.append(metrics(p, timeframe)["sharpe"])
             ports.append(p)

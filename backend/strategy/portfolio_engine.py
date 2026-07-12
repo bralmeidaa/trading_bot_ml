@@ -42,8 +42,15 @@ class PortfolioConfig:
     btc_filter: bool = True
     max_universe: int = 15        # liquidity cap (top-N by trailing volume)
     total_capital: float = 1200.0
+    # Static exposure fraction (0..1) scaling all target weights. Validated
+    # (research_daily_margin/riskoverlay, 6y): full exposure = ~-69% maxDD; a
+    # constant fraction scales DD & return ~linearly while PRESERVING the Sharpe
+    # (0.76 full / ~1.0 OOS). Dynamic vol targeting was tested and REJECTED — it
+    # destroyed the OOS edge (Sharpe→0.04) via churn + backward-looking de-lever.
+    # 0.35 → ~-27% maxDD (full) / ~-21% (OOS), CAGR ~+15.6% (conservative choice).
+    exposure: float = 0.35
     cost_per_side: float = DEFAULT_COST_PER_SIDE
-    max_drawdown_kill: float = 0.35   # halt if drawdown exceeds this
+    max_drawdown_kill: float = 0.35   # backstop; rarely fires at exposure 0.35
     mark_interval_sec: int = 3600     # mark-to-market cadence (live loop)
     history_days: int = 200           # history window to fetch (> build_panel min_bars)
     paper_trading: bool = True
@@ -110,7 +117,9 @@ class CrossSectionalPortfolioEngine:
         liq = None
         if volume is not None:
             liq = (close * volume).rolling(30, min_periods=5).mean().iloc[-1]
-        return target_weights(sig, c.k, liq, c.max_universe)
+        # Static exposure sizing: scale the market-neutral weights by the (0..1)
+        # exposure fraction. Preserves neutrality & ranking; dials DD/return.
+        return target_weights(sig, c.k, liq, c.max_universe) * c.exposure
 
     def mark_to_market(self, prices: Dict[str, float]) -> float:
         """Update equity by the weighted return since last mark. Returns port return."""

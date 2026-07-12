@@ -39,6 +39,19 @@ class TestComputeWeights:
         assert w.sum() == pytest.approx(0.0, abs=1e-9)
         assert (w > 0).sum() == 2 and (w < 0).sum() == 2   # k=2 each side
 
+    def test_exposure_scales_gross_preserves_neutrality(self):
+        """Static exposure fraction scales gross book linearly, keeps net ~0."""
+        close, vol = _panel()
+        full = _engine(exposure=1.0).compute_weights(close, vol)
+        half = _engine(exposure=0.5).compute_weights(close, vol)
+        assert half.abs().sum() == pytest.approx(0.5 * full.abs().sum())  # gross halves
+        assert half.sum() == pytest.approx(0.0, abs=1e-9)                 # still neutral
+        assert (half > 0).sum() == 2 and (half < 0).sum() == 2           # same legs
+
+    def test_default_exposure_is_conservative(self):
+        """Guard the validated conservative default (=> ~-27% maxDD full / -21% OOS)."""
+        assert PortfolioConfig(universe=SYMS).exposure == 0.35
+
     def test_regime_off_returns_flat(self):
         # btc_filter on; force BTC downtrend → flat
         cfg = PortfolioConfig(universe=SYMS, lookback=10, k=2, btc_filter=True,

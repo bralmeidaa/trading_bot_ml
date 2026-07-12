@@ -16,6 +16,7 @@ import pytest
 
 from backend.strategy.cross_sectional import (
     target_weights, momentum_signal, btc_regime, simulate, metrics, walk_forward,
+    realized_vol, vol_target_scale,
 )
 
 SYMS = [f"C{i}" for i in range(8)]
@@ -114,6 +115,44 @@ class TestSimulate:
         # reconstruct weights indirectly: a constant-drift panel with no regime
         port = simulate(close, 20, 10, 2, btc_filter=False, volume=vol)
         assert isinstance(port, pd.Series) and len(port) == len(close)
+
+
+class TestVolTargetOverlay:
+    def test_scale_inverse_to_vol(self):
+        """Higher realized vol → lower exposure scale (and vice-versa)."""
+        calm = pd.Series(np.full(200, 0.0005))          # tiny vol
+        wild = pd.Series(np.tile([0.05, -0.05], 100))   # large vol
+        s_calm = vol_target_scale(calm, 0.10, lookback=30, max_lev=1.5)
+        s_wild = vol_target_scale(wild, 0.10, lookback=30, max_lev=1.5)
+        assert s_calm.iloc[-1] > s_wild.iloc[-1]
+
+    def test_scale_capped_at_max_lev(self):
+        calm = pd.Series(np.full(200, 1e-6))            # ~zero vol → huge raw scale
+        s = vol_target_scale(calm, 0.10, lookback=30, max_lev=1.5)
+        assert s.max() <= 1.5 + 1e-9
+
+    def test_realized_vol_positive_and_scales(self):
+        a = pd.Series(np.tile([0.01, -0.01], 100))
+        b = pd.Series(np.tile([0.03, -0.03], 100))
+        assert realized_vol(a).iloc[-1] < realized_vol(b).iloc[-1]
+
+    def test_target_vol_delevers_when_over_target(self):
+        """When realized vol exceeds the target, the overlay must de-lever:
+        lower output vol AND drawdown no worse than full exposure (max_lev=1)."""
+        close, vol = _trending_panel(n=800, seed=3)
+        base = simulate(close, 20, 10, 2, btc_filter=False, volume=vol)
+        # target well below the strategy's realized vol → scale < 1 everywhere
+        vt = simulate(close, 20, 10, 2, btc_filter=False, volume=vol,
+                      target_vol=0.005, max_lev=1.0)
+        assert vt.std() < base.std()                                   # de-levered
+        assert metrics(vt, "1d")["maxdd"] >= metrics(base, "1d")["maxdd"]  # DD no worse
+
+    def test_none_is_unchanged(self):
+        """target_vol=None must be byte-identical to the base (no behavior change)."""
+        close, vol = _trending_panel(n=500)
+        a = simulate(close, 20, 10, 2, btc_filter=False, volume=vol)
+        b = simulate(close, 20, 10, 2, btc_filter=False, volume=vol, target_vol=None)
+        pd.testing.assert_series_equal(a, b)
 
 
 class TestMetrics:
