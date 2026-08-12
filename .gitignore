@@ -20,3 +20,18 @@ logs/
 
 # Node
 frontend/node_modules/
+
+# Backtest run artifacts
+bt_run.log
+bt_aligned.json
+backtest_results.json
+tune_link.log
+research*.log
+research_feat.log
+backend/data/_cache/
+test_run.log
+.claude/research/reports/
+.claude/research/__pycache__/
+intraday_sweep.log
+orderbook_data/
+.claude/research/_obcache/
