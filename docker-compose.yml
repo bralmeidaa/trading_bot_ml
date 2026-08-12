@@ -91,6 +91,13 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./fullchainCert.pem:/etc/nginx/ssl/fullchainCert.pem:ro
       - ./privateKey.pem:/etc/nginx/ssl/privateKey.pem:ro
+      # Extra static sites (CIE: carteirinha.orgbr / validacao.estudante.orgbr)
+      # served by this same nginx. Certs + content live OUTSIDE the deploy dir
+      # (/home/ubuntu, absolute) so the CI/CD's `rm -rf /opt/trading-bot-ml/*`
+      # can't wipe them — mirrors the order-book/DB persistence pattern.
+      - /home/ubuntu/ssl-cie/fullchain.pem:/etc/nginx/ssl/cie-fullchain.pem:ro
+      - /home/ubuntu/ssl-cie/privatekey.pem:/etc/nginx/ssl/cie-privatekey.pem:ro
+      - /home/ubuntu/CIE:/var/www/CIE:ro
     depends_on:
       - trading-bot
     restart: unless-stopped
