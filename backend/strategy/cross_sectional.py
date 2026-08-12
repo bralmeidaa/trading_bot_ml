@@ -78,11 +78,16 @@ def simulate(close: pd.DataFrame, lookback: int, rebalance: int, k: int,
              mode: str = "momentum", btc_filter: bool = True,
              cost: float = DEFAULT_COST_PER_SIDE, volume: pd.DataFrame = None,
              max_universe: int = 15, target_vol: float | None = None,
-             vol_lookback: int = 30, max_lev: float = 1.5) -> pd.Series:
+             vol_lookback: int = 30, max_lev: float = 1.5,
+             regime_override: pd.Series | None = None) -> pd.Series:
     """
     Simulate the market-neutral cross-sectional portfolio. Returns per-bar net
     return series. No look-ahead: weights set at rebalance bar t use signal at t,
     portfolio return at t+1 uses weights from t (shift).
+
+    regime_override (bool series over close.index): if given, use it as the
+    trend-on gate instead of the built-in BTC-EMA filter (btc_filter ignored).
+    Used by regime research to test alternative filters. None = default behavior.
 
     target_vol (annualized, e.g. 0.10): if set, applies a volatility-targeting
     overlay — a DAILY exposure scale clip(target_vol/trailing_vol, 0, max_lev) is
@@ -97,7 +102,10 @@ def simulate(close: pd.DataFrame, lookback: int, rebalance: int, k: int,
 
     sig = momentum_signal(close, lookback, mode)
     qvol = (close * volume).rolling(30, min_periods=5).mean() if volume is not None else None
-    regime_on = btc_regime(close, lookback) if btc_filter else pd.Series(True, index=close.index)
+    if regime_override is not None:
+        regime_on = regime_override.reindex(close.index).fillna(False).astype(bool)
+    else:
+        regime_on = btc_regime(close, lookback) if btc_filter else pd.Series(True, index=close.index)
 
     weights = pd.DataFrame(0.0, index=close.index, columns=close.columns)
     cur_w = pd.Series(0.0, index=close.columns)
