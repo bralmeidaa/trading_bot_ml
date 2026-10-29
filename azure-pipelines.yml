@@ -1,5 +1,21 @@
 # Azure DevOps Pipeline for Trading Bot ML
-# Deploy to OCI VM with Docker
+# Build on a Microsoft-hosted agent, deploy over SSH to the Hetzner VM.
+#
+# Rewritten 2026-10-29 after losing the old self-hosted-agent VM (OCI free
+# tier ARM instance, reclaimed by Oracle's June/2026 Always-Free cut). The
+# self-hosted agent used to run ON that VM, so when it died, CI/CD died with
+# it. Decoupling build/deploy from the app host's lifecycle is the fix —
+# a lost/replaced VM no longer takes the pipeline down with it.
+#
+# New host: Hetzner Cloud VM (trading.bratech.me), ARM64 (aarch64), so the
+# image is still built for linux/arm64 — just via QEMU emulation on the
+# Microsoft-hosted x86 runner now (no GA ARM64-hosted Linux pool exists in
+# Azure Pipelines as of Oct/2026), instead of natively like the old self-
+# hosted ARM agent used to.
+#
+# TLS is no longer handled by this pipeline: certbot (Let's Encrypt) runs
+# directly on the VM with its own systemd renewal timer. The old ZeroSSL
+# DownloadSecureFile steps are gone.
 
 # trigger:
 #   branches:
@@ -12,29 +28,22 @@
 #     - docs/*
 
 pool:
-  name: 'trading-bot-ml-vm'
+  vmImage: 'ubuntu-latest'
 
 variables:
-  # Link the variable group so its vars (SMTP_HOST/USER/PASS, ALERT_TO, etc.)
-  # resolve as $(VAR) in this pipeline. Required for the regime email alert.
   - group: trading-bot-vg
-  # Azure DevOps Variables (set in pipeline variables)
   - name: deploymentPath
     value: '/opt/trading-bot-ml'
   - name: registryUrl
     value: 'docker.io'
   - name: imageRepository
     value: 'bralmeida/trading-bot-ml'
-  - name: dockerImageTag
-    value: '$(Build.BuildId)'
   - name: dockerImageLatestTag
     value: 'latest'
-  - name: dockerImageCacheTag
-    value: 'cache'
   - name: dockerfilePath
     value: './Dockerfile'
-  - name: fullchain_serverCertificatePath
-    value: '$(System.DefaultWorkingDirectory)/fullchain_serverCertificate.crt'
+  - name: sshEndpoint
+    value: 'hetzner-trading-vm'
 
 stages:
 - stage: Build
@@ -42,56 +51,10 @@ stages:
   jobs:
   - job: BuildJob
     displayName: 'Build Docker Image'
-    
+
     steps:
     - checkout: self
       displayName: 'Checkout source code'
-
-    - task: Bash@3
-      displayName: 'Turn Off and CleanUp Docker Container Images'
-      inputs:
-        targetType: 'inline'
-        workingDirectory: '$(deploymentPath)'
-        script: | 
-          echo "🛑 Stopping and removing containers with verbose output..."
-          docker compose down --rmi all -v || true
-          
-          echo "🧹 Aggressive Docker cleanup..."
-          docker system prune -af --volumes
-          
-          echo "🗑️ Removing dangling images and build cache..."
-          docker builder prune -af || true
-          
-          echo "📊 Docker system info after cleanup:"
-          docker system df
-
-    - task: Bash@3
-      displayName: 'Clean deployment folder'
-      inputs:
-        targetType: 'inline'
-        workingDirectory: '$(deploymentPath)'
-        script: | 
-          echo "🧹 Cleaning deployment folder with verbose output..."
-          sudo rm -rv /opt/trading-bot-ml/* || true
-
-          sudo rm -rv /opt/trading_bot_ml || true
-          
-          echo "📁 Creating fresh deployment directory..."
-          sudo mkdir -p /opt/trading-bot-ml
-          sudo chown -R $(whoami):$(whoami) /opt/trading-bot-ml
-
-    - task: CopyFiles@2
-      inputs:
-        SourceFolder: '$(System.DefaultWorkingDirectory)'
-        Contents: |
-          **/*
-          !.git/**/*
-          !**/*.md
-          !**/*.*ignore
-        TargetFolder: '$(deploymentPath)'
-        CleanTargetFolder: false
-        OverWrite: true
-        ignoreMakeDirErrors: true
 
     - task: Docker@2
       displayName: 'Docker Login'
@@ -100,28 +63,27 @@ stages:
         command: 'login'
 
     - task: Bash@3
-      displayName: 'Build image with Buildx'
+      displayName: 'Build image with Buildx (arm64 via QEMU)'
       inputs:
         targetType: 'inline'
-        workingDirectory: '$(deploymentPath)'
-        script: | 
+        script: |
           set -e
-          
-          echo "🔨 Building Docker image with no cache to ensure fresh build..."
-          echo "📂 Current directory contents:"
-          ls -la
 
-          echo "🏗️ Building image for platform linux/arm64..."
+          echo "🧩 Registering QEMU binfmt handlers for cross-arch emulation..."
+          docker run --rm --privileged tonistiigi/binfmt --install arm64
+
+          echo "🏗️ Creating a buildx builder with multi-platform support..."
+          docker buildx create --use --name multiarch-builder || docker buildx use multiarch-builder
+
+          echo "🔨 Building for linux/arm64 (target VM is Hetzner ARM, aarch64)..."
           docker buildx build \
           --platform linux/arm64 \
           --tag '$(imageRepository):$(dockerImageLatestTag)' \
           --file $(dockerfilePath) \
           --no-cache \
-          --pull \
           --push .
-          
+
           echo "✅ Docker image built and pushed successfully!"
-          echo "🏷️ Image tag: $(imageRepository):$(dockerImageLatestTag)"
 
     - task: Docker@2
       displayName: 'Docker Logout'
@@ -136,86 +98,82 @@ stages:
   jobs:
   - deployment: DeployApp
     displayName: 'Deploy App'
-    environment: 'pre-production'  
+    environment: 'pre-production'
     strategy:
       runOnce:
         deploy:
-          steps:  
-          - task: DownloadSecureFile@1
-            name: 'serverCertificate'
-            displayName: 'Downloading Certificate File'
+          steps:
+          - checkout: self
+            displayName: 'Checkout source code'
+
+          - task: CopyFilesOverSSH@0
+            displayName: 'Copy docker-compose.yml to the VM'
             inputs:
-              secureFile: 'trading_braatech_xyz.pem'
+              sshEndpoint: '$(sshEndpoint)'
+              sourceFolder: '$(Pipeline.Workspace)/s'
+              contents: 'docker-compose.yml'
+              targetFolder: '$(deploymentPath)'
+              overwriteExisting: true
+              failOnEmptySource: true
+            # nginx.conf in the repo is the container-oriented reference copy
+            # (kept for docs/history). The LIVE site config is a host file,
+            # /etc/nginx/conf.d/trading-bot.conf, edited directly over SSH
+            # when it changes — not auto-synced by this pipeline (deliberate,
+            # to avoid silently overwriting a hand-tuned host config with a
+            # differently-shaped file). Revisit if this becomes a recurring
+            # change; for now it's rare enough to do by hand.
 
-          - task: DownloadSecureFile@1
-            name: 'privateKey'
-            displayName: 'Downloading Private Key File'
+          - task: SSH@0
+            displayName: 'Render .env on the VM'
             inputs:
-              secureFile: 'trading_braatech_xyz_key.pem'
-
-          - task: DownloadSecureFile@1
-            name: 'caCertificate'
-            displayName: 'Downloading CA Certificate File'
-            inputs:
-              secureFile: 'zerossl_ca_bundle.pem'
-        
-          - task: Bash@3
-            displayName: 'Combine SSL Certs and Set env variables'
-            inputs:
-              workingDirectory: '$(deploymentPath)'
-              targetType: 'inline'
-              script: | 
-                sudo rm -rf *.pem || true
-
-                sudo cat $(serverCertificate.secureFilePath) $(caCertificate.secureFilePath) > ./fullchainCert.pem
-
-                #copy private key secure file
-                sudo cp -p --verbose $(privateKey.secureFilePath) ./privateKey.pem
-
-                #Create env file with secrets
-                echo "🔧 Setting up environment..."
-                cat > .env <<'EOL'
-                BINANCE_API_KEY=$(BINANCE_API_KEY)
-                BINANCE_API_SECRET=$(BINANCE_API_SECRET)
+              sshEndpoint: '$(sshEndpoint)'
+              runOptions: 'inline'
+              inline: |
+                set -e
+                cat > $(deploymentPath)/.env <<'EOL'
                 ENVIRONMENT=production
-                BUILD_ID=$(dockerImageLatestTag)
                 SMTP_HOST=$(SMTP_HOST)
                 SMTP_PORT=$(SMTP_PORT)
                 SMTP_USER=$(SMTP_USER)
                 SMTP_PASS=$(SMTP_PASS)
                 ALERT_TO=$(ALERT_TO)
+                AZURE_AI_FOUNDRY_ENDPOINT=$(AZURE_AI_FOUNDRY_ENDPOINT)
+                AZURE_AI_FOUNDRY_API_KEY=$(AZURE_AI_FOUNDRY_API_KEY)
+                AZURE_AI_FOUNDRY_DEPLOYMENT=$(AZURE_AI_FOUNDRY_DEPLOYMENT)
                 EOL
+                chmod 600 $(deploymentPath)/.env
+                echo "✅ .env written"
 
-                #Check .env creation
-                ls -la .env
-
-          - task: Bash@3
-            displayName: 'Docker Compose Deploy'
+          - task: SSH@0
+            displayName: 'Docker Compose Deploy + nginx reload'
             inputs:
-              targetType: 'inline'
-              workingDirectory: '$(deploymentPath)'
-              script: | 
+              sshEndpoint: '$(sshEndpoint)'
+              runOptions: 'inline'
+              inline: |
                 set -e
-                
-                echo "🔄 Pulling latest images..."
+                cd $(deploymentPath)
+
+                echo "📁 Ensuring persistent host data dirs (outside deploy dir, owned by container uid 1000)..."
+                mkdir -p /opt/trading-bot-data/orderbook_data /opt/trading-bot-data/db
+                chown -R 1000:1000 /opt/trading-bot-data
+
+                echo "🔄 Pulling latest image..."
                 docker compose pull
 
-                echo "📁 Ensuring persistent host data dirs (outside deploy dir & volumes, owned by container uid 1000)..."
-                sudo mkdir -p /opt/trading-bot-data/orderbook_data /opt/trading-bot-data/db
-                sudo chown -R 1000:1000 /opt/trading-bot-data
-
-                echo "🚀 Starting new containers with fresh images..."
+                echo "🚀 Starting new container with fresh image..."
                 docker compose up -d --force-recreate --remove-orphans
-                  
-                echo "⏳ Waiting for services to start..."
-                sleep 30
 
-                echo "📋 Current running containers:"
+                echo "🧹 Light cleanup (unused images only, never volumes/running containers)..."
+                docker image prune -f || true
+
+                echo "🔧 Sanity-check + reload the host nginx (site config lives in /etc/nginx/conf.d, managed separately)..."
+                nginx -t && systemctl reload nginx || true
+
+                echo "⏳ Waiting for the app to come up..."
+                sleep 15
                 docker compose ps
-                
-                echo "📊 Container logs (last 20 lines):"
                 docker compose logs --tail=20
-                
+
                 echo "✅ Deployment completed successfully!"
 
 - stage: Testing
@@ -224,43 +182,38 @@ stages:
   condition: succeeded()
   jobs:
   - job: URLValidation
-    displayName: 'Valide the App URLs'
+    displayName: 'Validate the App URLs'
     steps:
           - task: Bash@3
-            displayName: 'Verify Application Status'
+            displayName: 'Verify Deployment (public HTTPS endpoint)'
             inputs:
               targetType: 'inline'
-              script: | 
-                echo "🔍 Verifying deployment..."
-                
-                # Test API endpoint
-                response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:12000/api/health || echo "000")
-                
-                if [ $response -eq 200 ]; then
+              script: |
+                echo "🔍 Verifying deployment via https://trading.bratech.me ..."
+
+                response=$(curl -s -o /dev/null -w "%{http_code}" https://trading.bratech.me/api/health || echo "000")
+                if [ "$response" -eq 200 ]; then
                   echo "✅ API health check passed"
                 else
                   echo "❌ API health check failed (HTTP $response)"
                   exit 1
                 fi
-                
-                # Test dashboard
-                response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:12000/)
-                
-                if [ $response -eq 200 ]; then
+
+                response=$(curl -s -o /dev/null -w "%{http_code}" https://trading.bratech.me/)
+                if [ "$response" -eq 200 ]; then
                   echo "✅ Dashboard is accessible"
-                  # The app auto-starts collector + portfolio on boot (startup hook).
-                  # These explicit calls are belt-and-suspenders (idempotent).
-                  curl -fsS -X POST http://localhost:12000/api/collector/start || true
-                  curl -fsS -X POST http://localhost:12000/api/portfolio/start || true
+                  # The app auto-starts collector + AI agent on boot (startup hook).
+                  # Explicit call is belt-and-suspenders (idempotent) — the AGENT is
+                  # the active paper strategy now, not the cross-sectional portfolio.
+                  curl -fsS -X POST https://trading.bratech.me/api/collector/start || true
+                  curl -fsS -X POST https://trading.bratech.me/api/agent/start || true
                 else
                   echo "❌ Dashboard is not accessible (HTTP $response)"
                   exit 1
                 fi
-                
-                echo "🎉 All verification checks passed!"
-                echo "📊 Dashboard URL: http://localhost:12000"
 
-                # Test nginx
+                echo "🎉 All verification checks passed!"
+                echo "📊 Dashboard URL: https://trading.bratech.me"
 
 - stage: InitialTShoot
   displayName: 'InitialTShoot'
@@ -268,46 +221,17 @@ stages:
   condition: failed()
   jobs:
   - job: RollbackJob
-    displayName: 'Rollback to Previous Version'
+    displayName: 'Diagnose Deployment Failure'
     steps:
-    - task: Bash@3
-      displayName: 'Initial Troubleshooting Steps'
-      inputs:   
-        targetType: 'inline'
-        workingDirectory: '$(deploymentPath)'
-        script: | 
-          set -e
-          
-          echo "🔍 Troubleshooting deployment failure..."
-          
-          echo "📊 Docker system status:"
-          docker system df
-          
-          echo "📋 Current containers:"
-          docker compose ps -a
-          
-          echo "📝 Container logs (last 50 lines):"
-          docker compose logs --tail=50
-          
-          echo "🏗️ Image information:"
-          docker images | grep trading-bot
-          
-          echo "🌐 Network connectivity test:"
-          curl -v http://localhost:12000/api/health || echo "Health check failed"
-#           echo "🔄 Starting rollback process..."
-          
-#           ssh -o StrictHostKeyChecking=no $(OCI_VM_USER)@$(OCI_VM_IP) << 'EOF'
-#             set -e
-#             cd $(deploymentPath)
-            
-#             echo "🛑 Stopping current containers..."
-#             docker compose down
-            
-#             echo "🔄 Rolling back to previous image..."
-#             docker tag $(dockerImageName):previous $(dockerImageName):latest
-            
-#             echo "🚀 Starting previous version..."
-#             docker compose up -d
-            
-#             echo "✅ Rollback completed!"
-#           EOF
+    - task: SSH@0
+      displayName: 'Remote troubleshooting (on the VM)'
+      inputs:
+        sshEndpoint: '$(sshEndpoint)'
+        runOptions: 'inline'
+        inline: |
+          cd $(deploymentPath)
+          echo "📊 Docker system status:"; docker system df
+          echo "📋 Current containers:"; docker compose ps -a
+          echo "📝 Container logs (last 50 lines):"; docker compose logs --tail=50
+          echo "🌐 Local health check:"; curl -v http://127.0.0.1:12000/api/health || echo "Health check failed"
+          echo "🧾 nginx status:"; systemctl status nginx --no-pager | head -10

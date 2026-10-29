@@ -10,11 +10,25 @@ services:
       - BINANCE_API_KEY=${BINANCE_API_KEY:-}
       - BINANCE_API_SECRET=${BINANCE_API_SECRET:-}
       # Auto-launch on boot (set to 0 to disable). Collector accumulates order
-      # book history; portfolio runs the validated daily cross-sectional engine.
+      # book history; portfolio runs the validated daily cross-sectional engine
+      # (kept intact but OFF by default now — see AUTOSTART_AGENT below).
       - AUTOSTART_COLLECTOR=${AUTOSTART_COLLECTOR:-1}
-      - AUTOSTART_PORTFOLIO=${AUTOSTART_PORTFOLIO:-1}
+      - AUTOSTART_PORTFOLIO=${AUTOSTART_PORTFOLIO:-0}
       - COLLECTOR_INTERVAL_SEC=${COLLECTOR_INTERVAL_SEC:-60}
       - COLLECTOR_DIR=/app/orderbook_data
+      # AI trading agent (LLM-driven via Azure AI Foundry, paper only). Now the
+      # ACTIVE autostarted paper strategy, replacing the cross-sectional engine
+      # above — which stays startable manually (POST /api/portfolio/start) for
+      # comparison. No-ops with a logged warning (never blocks boot) if the
+      # Azure credentials below are unset.
+      - AUTOSTART_AGENT=${AUTOSTART_AGENT:-1}
+      - AZURE_AI_FOUNDRY_ENDPOINT=${AZURE_AI_FOUNDRY_ENDPOINT:-}
+      - AZURE_AI_FOUNDRY_API_KEY=${AZURE_AI_FOUNDRY_API_KEY:-}
+      - AZURE_AI_FOUNDRY_DEPLOYMENT=${AZURE_AI_FOUNDRY_DEPLOYMENT:-gpt-5-mini}
+      - AZURE_AI_FOUNDRY_API_VERSION=${AZURE_AI_FOUNDRY_API_VERSION:-2024-10-21}
+      - AGENT_TOTAL_CAPITAL=${AGENT_TOTAL_CAPITAL:-500.0}
+      - AGENT_CYCLE_INTERVAL_SEC=${AGENT_CYCLE_INTERVAL_SEC:-3600}
+      - AGENT_MAX_LLM_CALLS_PER_DAY=${AGENT_MAX_LLM_CALLS_PER_DAY:-150}
       # Paper-trading DB on the SAME persistent host mount as the order book, so
       # equity/trades/stats survive redeploys (default ./trading_bot.db lived in
       # the container layer = wiped every deploy). 4 slashes = absolute path.
@@ -60,60 +74,11 @@ services:
     networks:
       - trading-network
 
-  # Optional: Redis for caching and session management
-  redis:
-    image: redis:7-alpine
-    container_name: trading-bot-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-          cpus: '0.25'
-        reservations:
-          memory: 128M
-          cpus: '0.1'
-    networks:
-      - trading-network
-
-  # Optional: Nginx reverse proxy
-  nginx:
-    image: nginx:alpine
-    container_name: trading-bot-nginx
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./fullchainCert.pem:/etc/nginx/ssl/fullchainCert.pem:ro
-      - ./privateKey.pem:/etc/nginx/ssl/privateKey.pem:ro
-      # Extra static sites (CIE: carteirinha.orgbr / validacao.estudante.orgbr)
-      # served by this same nginx. Certs + content live OUTSIDE the deploy dir
-      # (/home/ubuntu, absolute) so the CI/CD's `rm -rf /opt/trading-bot-ml/*`
-      # can't wipe them — mirrors the order-book/DB persistence pattern.
-      - /home/ubuntu/ssl-cie/fullchain.pem:/etc/nginx/ssl/cie-fullchain.pem:ro
-      - /home/ubuntu/ssl-cie/privatekey.pem:/etc/nginx/ssl/cie-privatekey.pem:ro
-      - /home/ubuntu/CIE:/var/www/CIE:ro
-    depends_on:
-      - trading-bot
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-          cpus: '0.25'
-        reservations:
-          memory: 128M
-          cpus: '0.1'
-    networks:
-      - trading-network
-
-volumes:
-  redis_data:
+# redis: removed (2026-10) — never imported/used anywhere in the Python code.
+# nginx: removed from compose (2026-10) — now runs on the HOST (apt package,
+# not containerized), terminating TLS via certbot + proxying to 127.0.0.1:12000.
+# See nginx.conf in this repo for the equivalent host-level config (deployed
+# to /etc/nginx/conf.d/trading-bot.conf) and docs on the migration.
 
 networks:
   trading-network:
