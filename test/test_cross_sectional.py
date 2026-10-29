@@ -117,6 +117,37 @@ class TestSimulate:
         assert isinstance(port, pd.Series) and len(port) == len(close)
 
 
+class TestExtraSignal:
+    def test_zero_weight_is_unchanged(self):
+        """extra_weight=0.0 (default) must be byte-identical to the base."""
+        close, vol = _trending_panel(n=500)
+        extra = pd.DataFrame(np.random.default_rng(1).normal(size=close.shape),
+                             index=close.index, columns=close.columns)
+        a = simulate(close, 20, 10, 2, btc_filter=False, volume=vol)
+        b = simulate(close, 20, 10, 2, btc_filter=False, volume=vol,
+                     extra_signal=extra, extra_weight=0.0)
+        pd.testing.assert_series_equal(a, b)
+
+    def test_none_extra_signal_is_unchanged(self):
+        close, vol = _trending_panel(n=500)
+        a = simulate(close, 20, 10, 2, btc_filter=False, volume=vol)
+        b = simulate(close, 20, 10, 2, btc_filter=False, volume=vol,
+                     extra_signal=None, extra_weight=5.0)
+        pd.testing.assert_series_equal(a, b)
+
+    def test_strong_extra_signal_flips_ranking(self):
+        """A large enough extra_signal dominates momentum and reverses selection."""
+        close, vol = _trending_panel(n=400)
+        # Invert the ranking: give the momentum-worst symbol a huge extra boost.
+        inv = pd.DataFrame(0.0, index=close.index, columns=close.columns)
+        inv[SYMS[0]] = 100.0   # C0 has the worst drift in _trending_panel
+        inv[SYMS[-1]] = -100.0  # C7 has the best drift
+        base = simulate(close, 20, 10, 2, mode="momentum", btc_filter=False, volume=vol)
+        flipped = simulate(close, 20, 10, 2, mode="momentum", btc_filter=False, volume=vol,
+                           extra_signal=inv, extra_weight=1.0)
+        assert flipped.sum() != pytest.approx(base.sum())
+
+
 class TestVolTargetOverlay:
     def test_scale_inverse_to_vol(self):
         """Higher realized vol → lower exposure scale (and vice-versa)."""

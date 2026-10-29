@@ -121,8 +121,9 @@ def meta_filter_walk_forward(df, trades, n_splits=4, prob_thr=0.55):
     return approved, f"meta-filter approved {len(approved)}/{len(trades)} OOS setups"
 
 
-def run_one(symbol, timeframe, days, cfg, n_splits=4):
-    raw = fetch(symbol, timeframe, days)
+def run_one(symbol, timeframe, days, cfg, n_splits=4, raw=None):
+    if raw is None:
+        raw = fetch(symbol, timeframe, days)
     if len(raw) < 1000:
         print(f"  {symbol} {timeframe}: insufficient data ({len(raw)})")
         return None
@@ -130,7 +131,8 @@ def run_one(symbol, timeframe, days, cfg, n_splits=4):
     cfg.bar_minutes = bar_min
     setups = generate_setups(raw, symbol, cfg)
     if len(setups) < 30:
-        print(f"  {symbol} {timeframe}: only {len(setups)} setups — skip")
+        print(f"  {symbol} {timeframe} rr={cfg.rr} stop={cfg.stop_atr_mult}: "
+              f"only {len(setups)} setups — skip")
         return None
     trades = simulate_setups(raw, setups, cost_per_side=COST_PER_SIDE)
     raw_rep = expectancy_report(trades, "setups crus", days, timeframe)
@@ -138,7 +140,16 @@ def run_one(symbol, timeframe, days, cfg, n_splits=4):
     approved, note = meta_filter_walk_forward(trades, trades, n_splits)
     flt_rep = expectancy_report(approved, "com meta-filtro IA", days, timeframe)
     return {"raw": raw_rep, "filtered": flt_rep, "note": note, "fold": fc,
-            "n_setups": len(setups), "symbol": symbol, "tf": timeframe}
+            "n_setups": len(setups), "symbol": symbol, "tf": timeframe,
+            "rr": cfg.rr, "stop_atr_mult": cfg.stop_atr_mult}
+
+
+# Grade do "tip de influencer" (2026-10-27): stop baixo + alvo bem mais largo
+# que o risco (R:R assimétrico), apostando que o win rate não precisa ser alto
+# se o ganho por trade for muito maior que a perda. --rr-sweep varre isso de
+# verdade (o --sweep normal nunca variou rr/stop_atr_mult, só símbolo×tf).
+STOP_MULT_GRID = [0.5, 0.75, 1.0, 1.5]
+RR_GRID = [1.5, 2.0, 3.0, 5.0, 8.0]
 
 
 def _print_rep(rep):
@@ -156,6 +167,8 @@ def main():
     ap.add_argument("--timeframe", default="5m")
     ap.add_argument("--days", type=int, default=180)
     ap.add_argument("--sweep", action="store_true")
+    ap.add_argument("--rr-sweep", action="store_true",
+                    help="varre stop_atr_mult x rr (stop baixo/alvo largo incluso) por simbolo/tf")
     ap.add_argument("--cost", type=float, default=None, help="override cost per side")
     ap.add_argument("--stop-mult", type=float, default=1.0)
     ap.add_argument("--rr", type=float, default=2.0)
@@ -168,29 +181,37 @@ def main():
     cfg = SetupConfig(rr=args.rr, stop_atr_mult=args.stop_mult, require_trend=True,
                       require_vwap=True, min_vol_ratio=1.0)
 
-    combos = ([("BTC/USDT", tf) for tf in ("5m", "15m", "1h")] +
-              [("ETH/USDT", tf) for tf in ("5m", "15m", "1h")]) if args.sweep \
+    sym_tfs = ([("BTC/USDT", tf) for tf in ("5m", "15m", "1h")] +
+              [("ETH/USDT", tf) for tf in ("5m", "15m", "1h")]) if (args.sweep or args.rr_sweep) \
              else [(args.symbol, args.timeframe)]
 
     print("=" * 74)
     print(f"INTRADAY RESEARCH — ORB+VWAP+sessão | capital ${CAPITAL:.0f}, "
           f"risco {RISK_PER_TRADE:.0%}/trade, custo {COST_PER_SIDE*100:.2f}%/lado")
+    if args.rr_sweep:
+        print(f"  grade R:R assimetrico — stop_atr_mult={STOP_MULT_GRID}  rr={RR_GRID}")
     print("=" * 74)
 
     results, lines = [], []
-    for sym, tf in combos:
-        print(f"\n{sym} {tf} ({args.days}d):")
-        res = run_one(sym, tf, args.days, SetupConfig(**vars(cfg)) if False else cfg)
-        if not res:
-            continue
-        fc = res["fold"]
-        print(f"  {res['n_setups']} setups | {res['note']}")
-        if fc["n_folds"]:
-            print(f"  consistência (R por fold): {[round(e,2) for e in fc['per_fold']]} "
-                  f"→ {fc['pos_folds']}/{fc['n_folds']} folds positivos")
-        _print_rep(res["raw"])
-        _print_rep(res["filtered"])
-        results.append(res)
+    for sym, tf in sym_tfs:
+        raw = fetch(sym, tf, args.days)
+        combos = [(sm, rr) for sm in STOP_MULT_GRID for rr in RR_GRID] if args.rr_sweep \
+                 else [(cfg.stop_atr_mult, cfg.rr)]
+        for stop_mult, rr in combos:
+            print(f"\n{sym} {tf} stop={stop_mult}xATR rr={rr} ({args.days}d):")
+            this_cfg = SetupConfig(rr=rr, stop_atr_mult=stop_mult, require_trend=cfg.require_trend,
+                                   require_vwap=cfg.require_vwap, min_vol_ratio=cfg.min_vol_ratio)
+            res = run_one(sym, tf, args.days, this_cfg, raw=raw)
+            if not res:
+                continue
+            fc = res["fold"]
+            print(f"  {res['n_setups']} setups | {res['note']}")
+            if fc["n_folds"]:
+                print(f"  consistência (R por fold): {[round(e,2) for e in fc['per_fold']]} "
+                      f"→ {fc['pos_folds']}/{fc['n_folds']} folds positivos")
+            _print_rep(res["raw"])
+            _print_rep(res["filtered"])
+            results.append(res)
 
     # verdict: raw edge must hold across MOST folds AND be net-positive monthly
     print("\n" + "=" * 74)
@@ -212,19 +233,34 @@ def main():
         print("VEREDITO: nenhum setup com edge CONSISTENTE nos folds + lucro positivo.")
         print("Sinal cru pode aparecer num período, mas não se sustenta — sem edge robusto.")
 
+    if args.rr_sweep:
+        print("\n" + "-" * 74)
+        print("MELHORES por Sharpe-like (exp_r) com stop<=0.75xATR e rr>=3 (a grade do tip):")
+        tight_wide = [r for r in results if r["stop_atr_mult"] <= 0.75 and r["rr"] >= 3.0 and r["raw"]]
+        tight_wide.sort(key=lambda r: r["raw"]["exp_r"], reverse=True)
+        for r in tight_wide[:10]:
+            raw, fc = r["raw"], r["fold"]
+            print(f"  {r['symbol']} {r['tf']} stop={r['stop_atr_mult']}x rr={r['rr']}: "
+                  f"n={raw['n']} WR={raw['win_rate']:.0%} exp={raw['exp_r']:+.2f}R "
+                  f"mensal={raw['monthly_ret']:+.2%} {fc['pos_folds']}/{fc['n_folds']} folds+")
+        if not tight_wide:
+            print("  (nenhum setup com >=30 trades nessa região da grade)")
+
+    report_name = "intraday_rr_sweep_report.md" if args.rr_sweep else "intraday_report.md"
     os.makedirs(REPORT_DIR, exist_ok=True)
-    with open(os.path.join(REPORT_DIR, "intraday_report.md"), "w", encoding="utf-8") as fh:
+    with open(os.path.join(REPORT_DIR, report_name), "w", encoding="utf-8") as fh:
         fh.write(f"# Intraday ORB+VWAP+sessão — relatório\n\nCapital ${CAPITAL:.0f}, "
                  f"risco {RISK_PER_TRADE:.0%}/trade, custo {COST_PER_SIDE*100:.2f}%/lado\n\n")
-        fh.write("| symbol | tf | n | WR | exp(R) | semanal% | mensal% | mensal$ | maxDD |\n")
-        fh.write("|--------|----|---|----|--------|----------|---------|---------|-------|\n")
+        fh.write("| symbol | tf | stop(xATR) | rr | n | WR | exp(R) | semanal% | mensal% | mensal$ | maxDD |\n")
+        fh.write("|--------|----|------------|----|---|----|--------|----------|---------|---------|-------|\n")
         for res in results:
             f = res["filtered"] or res["raw"]
             if f:
-                fh.write(f"| {res['symbol']} | {res['tf']} | {f['n']} | {f['win_rate']:.0%} | "
+                fh.write(f"| {res['symbol']} | {res['tf']} | {res['stop_atr_mult']} | {res['rr']} | "
+                         f"{f['n']} | {f['win_rate']:.0%} | "
                          f"{f['exp_r']:+.2f} | {f['weekly_ret']:+.2%} | {f['monthly_ret']:+.2%} | "
                          f"${f['monthly_usd']:+.0f} | {f['maxdd']:+.1%} |\n")
-    print(f"\nRelatório salvo em {os.path.join(REPORT_DIR, 'intraday_report.md')}")
+    print(f"\nRelatório salvo em {os.path.join(REPORT_DIR, report_name)}")
 
 
 if __name__ == "__main__":

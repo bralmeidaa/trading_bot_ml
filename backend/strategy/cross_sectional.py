@@ -79,7 +79,9 @@ def simulate(close: pd.DataFrame, lookback: int, rebalance: int, k: int,
              cost: float = DEFAULT_COST_PER_SIDE, volume: pd.DataFrame = None,
              max_universe: int = 15, target_vol: float | None = None,
              vol_lookback: int = 30, max_lev: float = 1.5,
-             regime_override: pd.Series | None = None) -> pd.Series:
+             regime_override: pd.Series | None = None,
+             extra_signal: pd.DataFrame | None = None,
+             extra_weight: float = 0.0) -> pd.Series:
     """
     Simulate the market-neutral cross-sectional portfolio. Returns per-bar net
     return series. No look-ahead: weights set at rebalance bar t use signal at t,
@@ -88,6 +90,15 @@ def simulate(close: pd.DataFrame, lookback: int, rebalance: int, k: int,
     regime_override (bool series over close.index): if given, use it as the
     trend-on gate instead of the built-in BTC-EMA filter (btc_filter ignored).
     Used by regime research to test alternative filters. None = default behavior.
+
+    extra_signal / extra_weight: optional additional per-symbol signal (e.g.
+    funding rate, open interest, cross-asset regime — anything z-scored to a
+    comparable scale) blended into the ranking signal as
+    `sig = momentum_signal + extra_weight * extra_signal` before ranking. The
+    caller is responsible for point-in-time correctness of extra_signal (no
+    look-ahead) — this hook only combines, it doesn't shift anything extra.
+    extra_weight=0.0 (default) or extra_signal=None leaves behavior unchanged.
+    Used by research_intraday_v2_features.py.
 
     target_vol (annualized, e.g. 0.10): if set, applies a volatility-targeting
     overlay — a DAILY exposure scale clip(target_vol/trailing_vol, 0, max_lev) is
@@ -101,6 +112,8 @@ def simulate(close: pd.DataFrame, lookback: int, rebalance: int, k: int,
         return pd.Series(dtype=float)
 
     sig = momentum_signal(close, lookback, mode)
+    if extra_signal is not None and extra_weight:
+        sig = sig + extra_weight * extra_signal.reindex_like(sig).fillna(0.0)
     qvol = (close * volume).rolling(30, min_periods=5).mean() if volume is not None else None
     if regime_override is not None:
         regime_on = regime_override.reindex(close.index).fillna(False).astype(bool)
