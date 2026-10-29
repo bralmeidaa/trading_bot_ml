@@ -321,6 +321,116 @@ async def get_portfolio():
     })
 
 
+# ── AI trading agent (Azure AI Foundry, paper trading only) ────────────────
+# Replaces the cross-sectional engine as the ACTIVE autostarted strategy — see
+# the plan / docs for why. The cross-sectional engine's code above is
+# untouched and still startable manually via POST /api/portfolio/start;
+# reverting is just flipping AUTOSTART_AGENT/AUTOSTART_PORTFOLIO back.
+agent_engine = None          # type: ignore
+agent_task: Optional[asyncio.Task] = None
+
+
+@app.post("/api/agent/start", tags=["AI Agent"],
+         summary="Start the AI trading agent (Azure AI Foundry, paper)")
+async def start_agent():
+    """Launches the LLM-driven paper-trading agent. Fails closed (400) if
+    Azure AI Foundry credentials aren't configured — unlike optional
+    integrations (e.g. the SMTP alert), this agent cannot function at all
+    without an LLM, so it refuses to start rather than silently no-op."""
+    global agent_engine, agent_task
+    if agent_task and not agent_task.done():
+        raise HTTPException(400, "AI agent already running")
+    from backend.agent.llm_client import AgentLLMClient, config_from_env
+    llm_cfg = config_from_env()
+    if llm_cfg is None:
+        raise HTTPException(400, "Azure AI Foundry not configured "
+                                 "(set AZURE_AI_FOUNDRY_ENDPOINT / AZURE_AI_FOUNDRY_API_KEY)")
+    try:
+        import ccxt
+        from backend.agent.engine import AIAgentEngine, AgentConfig
+        try:
+            from backend.persistence.database import init_db
+            from backend.persistence.repository import (
+                AgentEquityRepository, AgentDailyStatsRepository,
+                AgentDecisionLogRepository, TradeRepository,
+            )
+            init_db()   # create tables (agent_equity_snapshots, etc.) — idempotent
+            eq_repo, daily_repo = AgentEquityRepository(), AgentDailyStatsRepository()
+            decision_repo, trade_repo = AgentDecisionLogRepository(), TradeRepository()
+        except Exception:
+            eq_repo = daily_repo = decision_repo = trade_repo = None
+        cfg = AgentConfig(
+            total_capital=float(os.getenv("AGENT_TOTAL_CAPITAL", "500.0")),
+            cycle_interval_sec=int(os.getenv("AGENT_CYCLE_INTERVAL_SEC", "3600")),
+            max_llm_calls_per_day=int(os.getenv("AGENT_MAX_LLM_CALLS_PER_DAY", "150")),
+        )
+        exchange = await asyncio.to_thread(lambda: ccxt.binance({"enableRateLimit": True}))
+        llm_client = AgentLLMClient(llm_cfg)
+        agent_engine = AIAgentEngine(cfg, exchange=exchange, llm_client=llm_client,
+                                     equity_repo=eq_repo, daily_repo=daily_repo,
+                                     decision_repo=decision_repo, trade_repo=trade_repo)
+        agent_task = asyncio.create_task(agent_engine.start())
+        return ok({"message": "AI agent started (paper)", "universe": cfg.universe,
+                   "cycle_interval_sec": cfg.cycle_interval_sec,
+                   "model_deployment": llm_cfg.deployment})
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to start AI agent: {exc}")
+
+
+@app.post("/api/agent/stop", tags=["AI Agent"], summary="Stop the AI agent")
+async def stop_agent():
+    global agent_task, agent_engine
+    if not agent_task or agent_task.done():
+        raise HTTPException(400, "AI agent not running")
+    if agent_engine:
+        closed = await asyncio.to_thread(agent_engine.broker.close_all, "manual_stop")
+        agent_engine._persist_closed_trades(closed)
+        agent_engine.state.halted = True
+    agent_task.cancel()
+    return ok({"message": "AI agent stopped"})
+
+
+@app.get("/api/agent", tags=["AI Agent"],
+        summary="Current AI agent status, equity and positions")
+async def get_agent():
+    running = agent_task is not None and not agent_task.done()
+    if not agent_engine:
+        return ok({"running": False, "positions": [], "equity": 0.0,
+                   "total_pnl": 0.0, "daily_pnl": 0.0, "halted": False})
+    e = agent_engine
+    return ok({
+        "running": running,
+        "halted": e.state.halted,
+        "equity": round(e.broker.equity, 2),
+        "total_pnl": round(e.total_pnl, 2),
+        "daily_pnl": round(e.daily_pnl, 2),
+        "peak_equity": round(e.broker.peak_equity, 2),
+        "cycle_count": e.state.cycle_count,
+        "trades_today": e.state.trades_today,
+        "llm_calls_today": e.state.llm_calls_today,
+        "positions": e.positions(),
+        "config": {"universe": e.config.universe, "cycle_interval_sec": e.config.cycle_interval_sec,
+                   "max_position_pct": e.config.max_position_pct,
+                   "max_drawdown_kill": e.config.max_drawdown_kill},
+    })
+
+
+@app.get("/api/agent/decisions", tags=["AI Agent"],
+        summary="Recent AI agent decision log (audit trail)")
+async def get_agent_decisions(limit: int = 50):
+    """What the agent saw and decided each cycle — the non-determinism here
+    means this log, not a backtest, is how you audit its behavior."""
+    try:
+        from backend.persistence.database import init_db
+        from backend.persistence.repository import AgentDecisionLogRepository
+        init_db()   # idempotent — table may not exist yet if the agent was never started
+        return ok({"decisions": AgentDecisionLogRepository().get_recent(limit)})
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to read agent decision log: {exc}")
+
+
 # ── Order book collector (parallel data-accumulation track) ─────────────────
 orderbook_collector = None       # type: ignore
 collector_task: Optional[asyncio.Task] = None
@@ -438,9 +548,16 @@ async def _regime_alert_loop():
 
 @app.on_event("startup")
 async def _autostart():
-    """Auto-launch the collector, portfolio engine and regime alert on service boot.
-    Controlled by env: AUTOSTART_COLLECTOR / AUTOSTART_PORTFOLIO / AUTOSTART_REGIME_ALERT
-    (default '1'). Each wrapped so one failure never blocks the API from coming up."""
+    """Auto-launch the collector, portfolio engine, AI agent and regime alert
+    on service boot. Controlled by env: AUTOSTART_COLLECTOR / AUTOSTART_PORTFOLIO
+    / AUTOSTART_AGENT / AUTOSTART_REGIME_ALERT. Each wrapped so one failure
+    never blocks the API from coming up.
+
+    AUTOSTART_AGENT defaults to '1' (the AI agent is now the active paper
+    strategy) and AUTOSTART_PORTFOLIO defaults to '0' (the validated
+    cross-sectional engine stays intact and startable manually via
+    POST /api/portfolio/start, but is no longer auto-launched) — revert by
+    flipping these two env vars back, no code change needed."""
     global regime_alert_task
     if os.getenv("AUTOSTART_COLLECTOR", "1") != "0":
         try:
@@ -448,12 +565,18 @@ async def _autostart():
             logger.info(f"autostart: {msg}")
         except Exception as exc:
             logger.warning(f"autostart collector failed: {exc}")
-    if os.getenv("AUTOSTART_PORTFOLIO", "1") != "0":
+    if os.getenv("AUTOSTART_PORTFOLIO", "0") != "0":
         try:
             await start_portfolio()
             logger.info("autostart: portfolio engine started")
         except Exception as exc:
             logger.warning(f"autostart portfolio failed: {exc}")
+    if os.getenv("AUTOSTART_AGENT", "1") != "0":
+        try:
+            await start_agent()
+            logger.info("autostart: AI agent started")
+        except Exception as exc:
+            logger.warning(f"autostart AI agent failed: {exc}")   # e.g. Azure creds missing — never blocks API boot
     if os.getenv("AUTOSTART_REGIME_ALERT", "1") != "0":
         try:
             regime_alert_task = asyncio.create_task(_regime_alert_loop())

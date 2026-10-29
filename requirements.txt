@@ -61,6 +61,11 @@ matplotlib==3.8.2
 seaborn==0.13.0
 plotly==5.17.0
 
+# AI agent (Azure AI Foundry — OpenAI-compatible endpoint, API-key auth)
+openai>=1.40.0,<2.0.0
+feedparser==6.0.11
+requests==2.31.0
+
 # Optional heavy dependencies (enable later if needed)
 # tensorflow==2.15.0
 # torch==2.1.1

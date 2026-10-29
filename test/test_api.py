@@ -265,6 +265,32 @@ class TestPortfolioEndpoints:
         assert r.status_code == 400
 
 
+class TestAgentEndpoints:
+    """AZURE_AI_FOUNDRY_* is never set in the test environment — these cover
+    the idle/fail-closed paths without ever calling a real LLM."""
+
+    def test_agent_status_when_idle(self, api_client):
+        data = unwrap(api_client.get("/api/agent"))
+        assert data["running"] is False
+        assert data["positions"] == []
+        assert "total_pnl" in data
+
+    def test_agent_stop_when_idle_400(self, api_client):
+        r = api_client.post("/api/agent/stop")
+        assert r.status_code == 400
+
+    def test_agent_start_without_azure_config_fails_closed_400(self, api_client, monkeypatch):
+        monkeypatch.delenv("AZURE_AI_FOUNDRY_ENDPOINT", raising=False)
+        monkeypatch.delenv("AZURE_AI_FOUNDRY_API_KEY", raising=False)
+        r = api_client.post("/api/agent/start")
+        assert r.status_code == 400
+        assert "Azure AI Foundry" in r.json()["detail"]
+
+    def test_agent_decisions_empty_when_no_history(self, api_client):
+        data = unwrap(api_client.get("/api/agent/decisions"))
+        assert data["decisions"] == []
+
+
 class TestCollectorEndpoints:
     def test_collector_status_idle(self, api_client):
         data = unwrap(api_client.get("/api/collector"))

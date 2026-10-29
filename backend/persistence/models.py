@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
-    Column, DateTime, Float, Integer, String, UniqueConstraint
+    Column, DateTime, Float, Integer, String, Text, UniqueConstraint
 )
 from sqlalchemy.orm import DeclarativeBase
 
@@ -71,3 +71,64 @@ class DailyStats(Base):
     losses      = Column(Integer, default=0)
 
     __table_args__ = (UniqueConstraint("date", name="uq_daily_stats_date"),)
+
+
+# ── AI agent (Azure AI Foundry, paper trading) — dedicated tables ──────────
+# Deliberately NOT reusing EquitySnapshot/DailyStats above: those two tables
+# already have no strategy discriminator and are silently shared between the
+# two pre-existing engines (production_trading_system.py / portfolio_engine.py)
+# — adding a third writer would make that worse. New, additive tables instead
+# (created via init_db()'s create_all(), non-destructive). Closed trades DO
+# reuse TradeRecord/TradeRepository unchanged, via bot_id="ai_agent".
+
+class AgentEquitySnapshot(Base):
+    """Periodic equity curve sample for the AI agent's dedicated paper book."""
+    __tablename__ = "agent_equity_snapshots"
+
+    id            = Column(Integer,  primary_key=True, autoincrement=True)
+    timestamp     = Column(DateTime, nullable=False, index=True)
+    equity        = Column(Float,    nullable=False)
+    total_pnl     = Column(Float,    nullable=False)
+    daily_pnl     = Column(Float,    nullable=False)
+    open_positions = Column(Integer, default=0)
+
+
+class AgentDailyStats(Base):
+    """One row per trading day for the AI agent, written at midnight reset."""
+    __tablename__ = "agent_daily_stats"
+
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    date        = Column(String,  nullable=False, index=True)
+    pnl         = Column(Float,   nullable=False)
+    trades      = Column(Integer, default=0)
+    wins        = Column(Integer, default=0)
+    losses      = Column(Integer, default=0)
+    llm_calls   = Column(Integer, default=0)
+    tokens_used = Column(Integer, default=0)
+
+    __table_args__ = (UniqueConstraint("date", name="uq_agent_daily_stats_date"),)
+
+
+class AgentDecisionLog(Base):
+    """Durable WHAT-it-saw / WHY-it-decided log — the single most important
+    table for this feature, since the agent's behavior is non-deterministic.
+    Every cycle writes a row here regardless of outcome (hold / executed /
+    rejected / halted), so a human can audit "why did it do that" after the
+    fact without needing to re-run anything."""
+    __tablename__ = "agent_decision_log"
+
+    id                    = Column(Integer,  primary_key=True, autoincrement=True)
+    timestamp             = Column(DateTime, nullable=False, index=True)
+    cycle_id              = Column(Integer,  nullable=False, index=True)
+    symbols_considered    = Column(Text,     nullable=True)   # JSON list
+    context_snapshot      = Column(Text,     nullable=True)   # JSON: equity+positions at cycle start
+    raw_llm_output        = Column(Text,     nullable=True)
+    tool_calls_requested  = Column(Text,     nullable=True)   # JSON trace (every tool call made)
+    tool_calls_executed   = Column(Text,     nullable=True)   # JSON: subset that actually filled
+    guardrail_rejections  = Column(Text,     nullable=True)   # JSON, if any order was rejected
+    rationale             = Column(Text,     nullable=True)
+    model_name            = Column(String,   nullable=True)
+    prompt_tokens         = Column(Integer,  default=0)
+    completion_tokens     = Column(Integer,  default=0)
+    latency_ms            = Column(Integer,  default=0)
+    halted_reason         = Column(String,   nullable=True)   # set if the cycle skipped the LLM entirely

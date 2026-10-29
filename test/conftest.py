@@ -8,9 +8,11 @@ from datetime import datetime, timedelta
 # Use in-memory SQLite for all DB tests
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
-# Never auto-launch the collector / portfolio engine (network) during tests.
+# Never auto-launch the collector / portfolio engine / AI agent (network,
+# and for the agent, real LLM API cost) during tests.
 os.environ["AUTOSTART_COLLECTOR"] = "0"
 os.environ["AUTOSTART_PORTFOLIO"] = "0"
+os.environ["AUTOSTART_AGENT"] = "0"
 
 
 def _make_ohlcv(n: int = 500, seed: int = 42, trend: float = 0.0001) -> pd.DataFrame:
@@ -74,6 +76,40 @@ def fresh_db():
     Base.metadata.create_all(bind=engine)
     yield SessionLocal
     Base.metadata.drop_all(bind=engine)
+
+
+@pytest.fixture
+def mock_llm_client():
+    """Stub AgentLLMClient — .chat_with_tools is monkeypatchable per-test
+    (default stub always returns a bare `hold`-less empty ChatResult)."""
+    from backend.agent.llm_client import AgentLLMConfig, ChatResult
+
+    class _StubLLMClient:
+        def __init__(self):
+            self.cfg = AgentLLMConfig(endpoint="https://stub", api_key="stub",
+                                      deployment="stub-model")
+            self.calls = []
+
+        def chat_with_tools(self, messages, tools, tool_dispatch, max_tool_turns=4):
+            self.calls.append({"messages": messages, "tools": tools})
+            return ChatResult(text="(stub: no tool calls)")
+
+    return _StubLLMClient()
+
+
+@pytest.fixture
+def fake_exchange():
+    """Minimal ccxt-like stub: fetch_ticker returns a fixed price per symbol."""
+    class _FakeExchange:
+        def __init__(self, prices=None):
+            self.prices = prices or {"BTC/USDT": 50000.0, "ETH/USDT": 3000.0, "SOL/USDT": 150.0}
+
+        def fetch_ticker(self, symbol):
+            price = self.prices.get(symbol, 100.0)
+            return {"last": price, "percentage": 0.0, "high": price, "low": price,
+                   "quoteVolume": 1_000_000.0}
+
+    return _FakeExchange()
 
 
 @pytest.fixture

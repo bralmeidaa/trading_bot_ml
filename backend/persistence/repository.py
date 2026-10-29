@@ -13,7 +13,10 @@ from typing import List, Optional
 from sqlalchemy.exc import IntegrityError
 
 from .database import get_session
-from .models import TradeRecord, EquitySnapshot, DailyStats
+from .models import (
+    TradeRecord, EquitySnapshot, DailyStats,
+    AgentEquitySnapshot, AgentDailyStats, AgentDecisionLog,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +210,141 @@ class DailyStatsRepository:
                     "losses":  r.losses,
                 }
                 for r in reversed(rows)
+            ]
+        finally:
+            session.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# AI agent repositories — dedicated tables, see models.py for why they're
+# separate from EquityRepository/DailyStatsRepository above.
+# ══════════════════════════════════════════════════════════════════════════
+
+class AgentEquityRepository:
+    """Persist the AI agent's dedicated equity curve."""
+
+    def save(self, equity: float, total_pnl: float, daily_pnl: float,
+             open_positions: int = 0) -> None:
+        session = get_session()
+        try:
+            snap = AgentEquitySnapshot(
+                timestamp=datetime.utcnow(), equity=equity, total_pnl=total_pnl,
+                daily_pnl=daily_pnl, open_positions=open_positions,
+            )
+            session.add(snap)
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            logger.error(f"Failed to save agent equity snapshot: {exc}")
+        finally:
+            session.close()
+
+    def get_curve(self, limit: int = 500) -> List[dict]:
+        session = get_session()
+        try:
+            rows = (
+                session.query(AgentEquitySnapshot)
+                .order_by(AgentEquitySnapshot.timestamp.desc())
+                .limit(limit)
+                .all()
+            )
+            return [
+                {"timestamp": r.timestamp.isoformat(), "equity": r.equity,
+                 "total_pnl": r.total_pnl, "daily_pnl": r.daily_pnl,
+                 "open_positions": r.open_positions}
+                for r in reversed(rows)
+            ]
+        finally:
+            session.close()
+
+
+class AgentDailyStatsRepository:
+    """Persist the AI agent's per-day performance + LLM usage summary."""
+
+    def save(self, date_str: str, pnl: float, trades: int, wins: int, losses: int,
+             llm_calls: int = 0, tokens_used: int = 0) -> None:
+        session = get_session()
+        try:
+            existing = session.query(AgentDailyStats).filter_by(date=date_str).first()
+            if existing:
+                existing.pnl, existing.trades = pnl, trades
+                existing.wins, existing.losses = wins, losses
+                existing.llm_calls, existing.tokens_used = llm_calls, tokens_used
+            else:
+                session.add(AgentDailyStats(date=date_str, pnl=pnl, trades=trades,
+                                            wins=wins, losses=losses, llm_calls=llm_calls,
+                                            tokens_used=tokens_used))
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            logger.error(f"Failed to save agent daily stats for {date_str}: {exc}")
+        finally:
+            session.close()
+
+    def get_history(self, limit: int = 90) -> List[dict]:
+        session = get_session()
+        try:
+            rows = (
+                session.query(AgentDailyStats)
+                .order_by(AgentDailyStats.date.desc())
+                .limit(limit)
+                .all()
+            )
+            return [
+                {"date": r.date, "pnl": r.pnl, "trades": r.trades, "wins": r.wins,
+                 "losses": r.losses, "llm_calls": r.llm_calls, "tokens_used": r.tokens_used}
+                for r in reversed(rows)
+            ]
+        finally:
+            session.close()
+
+
+class AgentDecisionLogRepository:
+    """Persist the AI agent's per-cycle decision audit trail."""
+
+    def save(self, timestamp: datetime, cycle_id: int, symbols_considered: Optional[str] = None,
+             context_snapshot: Optional[str] = None, raw_llm_output: Optional[str] = None,
+             tool_calls_requested: Optional[str] = None, tool_calls_executed: Optional[str] = None,
+             guardrail_rejections: Optional[str] = None, rationale: Optional[str] = None,
+             model_name: Optional[str] = None, prompt_tokens: int = 0, completion_tokens: int = 0,
+             latency_ms: int = 0, halted_reason: Optional[str] = None) -> None:
+        session = get_session()
+        try:
+            session.add(AgentDecisionLog(
+                timestamp=timestamp, cycle_id=cycle_id, symbols_considered=symbols_considered,
+                context_snapshot=context_snapshot, raw_llm_output=raw_llm_output,
+                tool_calls_requested=tool_calls_requested, tool_calls_executed=tool_calls_executed,
+                guardrail_rejections=guardrail_rejections, rationale=rationale,
+                model_name=model_name, prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens, latency_ms=latency_ms,
+                halted_reason=halted_reason,
+            ))
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            logger.error(f"Failed to save agent decision log: {exc}")
+        finally:
+            session.close()
+
+    def get_recent(self, limit: int = 50) -> List[dict]:
+        session = get_session()
+        try:
+            rows = (
+                session.query(AgentDecisionLog)
+                .order_by(AgentDecisionLog.timestamp.desc())
+                .limit(limit)
+                .all()
+            )
+            return [
+                {"timestamp": r.timestamp.isoformat(), "cycle_id": r.cycle_id,
+                 "symbols_considered": r.symbols_considered, "context_snapshot": r.context_snapshot,
+                 "raw_llm_output": r.raw_llm_output, "tool_calls_requested": r.tool_calls_requested,
+                 "tool_calls_executed": r.tool_calls_executed,
+                 "guardrail_rejections": r.guardrail_rejections, "rationale": r.rationale,
+                 "model_name": r.model_name, "prompt_tokens": r.prompt_tokens,
+                 "completion_tokens": r.completion_tokens, "latency_ms": r.latency_ms,
+                 "halted_reason": r.halted_reason}
+                for r in rows
             ]
         finally:
             session.close()
