@@ -1,21 +1,28 @@
 # Azure DevOps Pipeline for Trading Bot ML
-# Build on a Microsoft-hosted agent, deploy over SSH to the Hetzner VM.
 #
-# Rewritten 2026-10-29 after losing the old self-hosted-agent VM (OCI free
-# tier ARM instance, reclaimed by Oracle's June/2026 Always-Free cut). The
-# self-hosted agent used to run ON that VM, so when it died, CI/CD died with
-# it. Decoupling build/deploy from the app host's lifecycle is the fix —
-# a lost/replaced VM no longer takes the pipeline down with it.
+# *** TEMPORARY SELF-HOSTED FALLBACK (2026-10-29) ***
+# The Microsoft-hosted pool ("Azure Pipelines") has no free parallelism
+# grant approved yet for this org — builds queue forever (notStarted).
+# Microsoft requires a manual request form for free hosted CI minutes
+# (https://aka.ms/azpipelines-parallelism-request), which can take hours to
+# a few business days to approve. Rather than block on that, this pipeline
+# temporarily runs self-hosted on the Hetzner VM itself (agent
+# "hetzner-trading-vm", pool "trading-bot-ml-vm") — the SAME coupling of
+# CI to the app host that caused the whole incident this session started
+# from (self-hosted agent died with the old OCI VM). This is a deliberate,
+# known regression, not a forgotten one.
 #
-# New host: Hetzner Cloud VM (trading.bratech.me), ARM64 (aarch64), so the
-# image is still built for linux/arm64 — just via QEMU emulation on the
-# Microsoft-hosted x86 runner now (no GA ARM64-hosted Linux pool exists in
-# Azure Pipelines as of Oct/2026), instead of natively like the old self-
-# hosted ARM agent used to.
+# TO REVERT once the parallelism grant is approved: see git history for the
+# Microsoft-hosted + QEMU + SSH-deploy version of this file (commit
+# 5d11f30), or re-ask for it — it builds via QEMU (tonistiigi/binfmt,
+# buildx) since there's still no GA Microsoft-hosted ARM64 Linux pool, and
+# deploys over SSH to a dedicated service connection ("hetzner-trading-vm",
+# already created in this Azure DevOps project).
 #
-# TLS is no longer handled by this pipeline: certbot (Let's Encrypt) runs
-# directly on the VM with its own systemd renewal timer. The old ZeroSSL
-# DownloadSecureFile steps are gone.
+# While self-hosted: build is NATIVE arm64 (no QEMU needed, the VM IS arm64)
+# and deploy runs directly in the same checked-out workspace (no SSH needed
+# — the agent already *is* the target machine), matching the pre-incident
+# pipeline's structure.
 
 # trigger:
 #   branches:
@@ -28,22 +35,18 @@
 #     - docs/*
 
 pool:
-  vmImage: 'ubuntu-latest'
+  name: 'trading-bot-ml-vm'
 
 variables:
   - group: trading-bot-vg
   - name: deploymentPath
     value: '/opt/trading-bot-ml'
-  - name: registryUrl
-    value: 'docker.io'
   - name: imageRepository
     value: 'bralmeida/trading-bot-ml'
   - name: dockerImageLatestTag
     value: 'latest'
   - name: dockerfilePath
     value: './Dockerfile'
-  - name: sshEndpoint
-    value: 'hetzner-trading-vm'
 
 stages:
 - stage: Build
@@ -56,6 +59,34 @@ stages:
     - checkout: self
       displayName: 'Checkout source code'
 
+    - task: Bash@3
+      displayName: 'Light cleanup (unused images only — never volumes/running containers)'
+      inputs:
+        targetType: 'inline'
+        script: |
+          docker image prune -f || true
+
+    - task: Bash@3
+      displayName: 'Refresh deployment folder'
+      inputs:
+        targetType: 'inline'
+        script: |
+          sudo mkdir -p $(deploymentPath)
+          sudo chown -R $(whoami):$(whoami) $(deploymentPath)
+
+    - task: CopyFiles@2
+      inputs:
+        SourceFolder: '$(System.DefaultWorkingDirectory)'
+        Contents: |
+          **/*
+          !.git/**/*
+          !**/*.md
+          !**/*.*ignore
+        TargetFolder: '$(deploymentPath)'
+        CleanTargetFolder: false
+        OverWrite: true
+        ignoreMakeDirErrors: true
+
     - task: Docker@2
       displayName: 'Docker Login'
       inputs:
@@ -63,26 +94,19 @@ stages:
         command: 'login'
 
     - task: Bash@3
-      displayName: 'Build image with Buildx (arm64 via QEMU)'
+      displayName: 'Build image (native arm64 — this VM IS arm64)'
       inputs:
         targetType: 'inline'
+        workingDirectory: '$(deploymentPath)'
         script: |
           set -e
-
-          echo "🧩 Registering QEMU binfmt handlers for cross-arch emulation..."
-          docker run --rm --privileged tonistiigi/binfmt --install arm64
-
-          echo "🏗️ Creating a buildx builder with multi-platform support..."
-          docker buildx create --use --name multiarch-builder || docker buildx use multiarch-builder
-
-          echo "🔨 Building for linux/arm64 (target VM is Hetzner ARM, aarch64)..."
+          echo "🔨 Building for linux/arm64 natively (no QEMU needed on this host)..."
           docker buildx build \
           --platform linux/arm64 \
           --tag '$(imageRepository):$(dockerImageLatestTag)' \
           --file $(dockerfilePath) \
           --no-cache \
           --push .
-
           echo "✅ Docker image built and pushed successfully!"
 
     - task: Docker@2
@@ -103,34 +127,13 @@ stages:
       runOnce:
         deploy:
           steps:
-          - checkout: self
-            displayName: 'Checkout source code'
-
-          - task: CopyFilesOverSSH@0
-            displayName: 'Copy docker-compose.yml to the VM'
+          - task: Bash@3
+            displayName: 'Render .env'
             inputs:
-              sshEndpoint: '$(sshEndpoint)'
-              sourceFolder: '$(Pipeline.Workspace)/s'
-              contents: 'docker-compose.yml'
-              targetFolder: '$(deploymentPath)'
-              overwriteExisting: true
-              failOnEmptySource: true
-            # nginx.conf in the repo is the container-oriented reference copy
-            # (kept for docs/history). The LIVE site config is a host file,
-            # /etc/nginx/conf.d/trading-bot.conf, edited directly over SSH
-            # when it changes — not auto-synced by this pipeline (deliberate,
-            # to avoid silently overwriting a hand-tuned host config with a
-            # differently-shaped file). Revisit if this becomes a recurring
-            # change; for now it's rare enough to do by hand.
-
-          - task: SSH@0
-            displayName: 'Render .env on the VM'
-            inputs:
-              sshEndpoint: '$(sshEndpoint)'
-              runOptions: 'inline'
-              inline: |
-                set -e
-                cat > $(deploymentPath)/.env <<'EOL'
+              workingDirectory: '$(deploymentPath)'
+              targetType: 'inline'
+              script: |
+                cat > .env <<'EOL'
                 ENVIRONMENT=production
                 SMTP_HOST=$(SMTP_HOST)
                 SMTP_PORT=$(SMTP_PORT)
@@ -141,21 +144,20 @@ stages:
                 AZURE_AI_FOUNDRY_API_KEY=$(AZURE_AI_FOUNDRY_API_KEY)
                 AZURE_AI_FOUNDRY_DEPLOYMENT=$(AZURE_AI_FOUNDRY_DEPLOYMENT)
                 EOL
-                chmod 600 $(deploymentPath)/.env
-                echo "✅ .env written"
+                chmod 600 .env
+                ls -la .env
 
-          - task: SSH@0
+          - task: Bash@3
             displayName: 'Docker Compose Deploy + nginx reload'
             inputs:
-              sshEndpoint: '$(sshEndpoint)'
-              runOptions: 'inline'
-              inline: |
+              targetType: 'inline'
+              workingDirectory: '$(deploymentPath)'
+              script: |
                 set -e
-                cd $(deploymentPath)
 
                 echo "📁 Ensuring persistent host data dirs (outside deploy dir, owned by container uid 1000)..."
-                mkdir -p /opt/trading-bot-data/orderbook_data /opt/trading-bot-data/db
-                chown -R 1000:1000 /opt/trading-bot-data
+                sudo mkdir -p /opt/trading-bot-data/orderbook_data /opt/trading-bot-data/db
+                sudo chown -R 1000:1000 /opt/trading-bot-data
 
                 echo "🔄 Pulling latest image..."
                 docker compose pull
@@ -163,11 +165,8 @@ stages:
                 echo "🚀 Starting new container with fresh image..."
                 docker compose up -d --force-recreate --remove-orphans
 
-                echo "🧹 Light cleanup (unused images only, never volumes/running containers)..."
-                docker image prune -f || true
-
                 echo "🔧 Sanity-check + reload the host nginx (site config lives in /etc/nginx/conf.d, managed separately)..."
-                nginx -t && systemctl reload nginx || true
+                sudo nginx -t && sudo systemctl reload nginx || true
 
                 echo "⏳ Waiting for the app to come up..."
                 sleep 15
@@ -223,13 +222,12 @@ stages:
   - job: RollbackJob
     displayName: 'Diagnose Deployment Failure'
     steps:
-    - task: SSH@0
-      displayName: 'Remote troubleshooting (on the VM)'
+    - task: Bash@3
+      displayName: 'Initial Troubleshooting Steps'
       inputs:
-        sshEndpoint: '$(sshEndpoint)'
-        runOptions: 'inline'
-        inline: |
-          cd $(deploymentPath)
+        targetType: 'inline'
+        workingDirectory: '$(deploymentPath)'
+        script: |
           echo "📊 Docker system status:"; docker system df
           echo "📋 Current containers:"; docker compose ps -a
           echo "📝 Container logs (last 50 lines):"; docker compose logs --tail=50
