@@ -1,0 +1,89 @@
+services:
+  trading-bot:
+    image: bralmeida/trading-bot-ml:latest
+    container_name: trading-bot-master
+    ports:
+      - "12000:12000"
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+      - BINANCE_API_KEY=${BINANCE_API_KEY:-}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET:-}
+      # Auto-launch on boot (set to 0 to disable). Collector accumulates order
+      # book history; portfolio runs the validated daily cross-sectional engine
+      # (kept intact but OFF by default now — see AUTOSTART_AGENT below).
+      - AUTOSTART_COLLECTOR=${AUTOSTART_COLLECTOR:-1}
+      - AUTOSTART_PORTFOLIO=${AUTOSTART_PORTFOLIO:-0}
+      - COLLECTOR_INTERVAL_SEC=${COLLECTOR_INTERVAL_SEC:-60}
+      - COLLECTOR_DIR=/app/orderbook_data
+      # AI trading agent (LLM-driven via Azure AI Foundry, paper only). Now the
+      # ACTIVE autostarted paper strategy, replacing the cross-sectional engine
+      # above — which stays startable manually (POST /api/portfolio/start) for
+      # comparison. No-ops with a logged warning (never blocks boot) if the
+      # Azure credentials below are unset.
+      - AUTOSTART_AGENT=${AUTOSTART_AGENT:-1}
+      - AZURE_AI_FOUNDRY_ENDPOINT=${AZURE_AI_FOUNDRY_ENDPOINT:-}
+      - AZURE_AI_FOUNDRY_API_KEY=${AZURE_AI_FOUNDRY_API_KEY:-}
+      - AZURE_AI_FOUNDRY_DEPLOYMENT=${AZURE_AI_FOUNDRY_DEPLOYMENT:-gpt-5-mini}
+      - AZURE_AI_FOUNDRY_API_VERSION=${AZURE_AI_FOUNDRY_API_VERSION:-2024-10-21}
+      - AGENT_TOTAL_CAPITAL=${AGENT_TOTAL_CAPITAL:-500.0}
+      - AGENT_CYCLE_INTERVAL_SEC=${AGENT_CYCLE_INTERVAL_SEC:-3600}
+      - AGENT_MAX_LLM_CALLS_PER_DAY=${AGENT_MAX_LLM_CALLS_PER_DAY:-150}
+      # Paper-trading DB on the SAME persistent host mount as the order book, so
+      # equity/trades/stats survive redeploys (default ./trading_bot.db lived in
+      # the container layer = wiped every deploy). 4 slashes = absolute path.
+      - DATABASE_URL=${DATABASE_URL:-sqlite:////app/data/trading_bot.db}
+      # Daily BTC-regime email alert (heartbeat + flip). No-ops until SMTP is set.
+      # Set SMTP_* / ALERT_TO via the pipeline .env (Gmail/Outlook app password).
+      - AUTOSTART_REGIME_ALERT=${AUTOSTART_REGIME_ALERT:-1}
+      - REGIME_ALERT_HOUR=${REGIME_ALERT_HOUR:-12}
+      # Daily AI-agent digest email (trades/holds/rejections/kill-switch).
+      # No-ops until SMTP is set (same SMTP_* as the regime alert above).
+      - AUTOSTART_AGENT_ALERT=${AUTOSTART_AGENT_ALERT:-1}
+      - AGENT_ALERT_HOUR=${AGENT_ALERT_HOUR:-22}
+      - REGIME_STATE_PATH=/app/data/regime_state.json
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - ALERT_TO=${ALERT_TO:-}
+    volumes:
+      # Persist collected order book history across redeploys. HOST BIND MOUNT to
+      # an ABSOLUTE path OUTSIDE the deploy dir (/opt/trading-bot-ml) AND outside
+      # Docker volumes, so it survives ALL of the CI/CD's destructive steps:
+      # `rm -rf /opt/trading-bot-ml/*`, `down -v`, and `system prune --volumes`.
+      # Host dir is chowned to uid:gid 1000:1000 (= tradingbot in the container;
+      # note the host `ubuntu` user is 1001, NOT 1000) so the collector can write.
+      - /opt/trading-bot-data/orderbook_data:/app/orderbook_data
+      # Paper-trading SQLite DB (+ its -wal/-shm) on the same persistent mount.
+      - /opt/trading-bot-data/db:/app/data
+    restart: unless-stopped
+    deploy:
+      resources:
+        # VM: 2 ARM cores / 16G RAM, NO swap. ML pre-training (365d of 1m
+        # candles + walk-forward) spikes memory well past 1G — with no swap
+        # that = instant OOM kill + restart. Give generous headroom.
+        limits:
+          memory: 3G
+          cpus: '1.5'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:12000/api/health"]
+      interval: 60s
+      timeout: 15s
+      retries: 5
+      start_period: 60s
+    networks:
+      - trading-network
+
+# redis: removed (2026-10) — never imported/used anywhere in the Python code.
+# nginx: removed from compose (2026-10) — now runs on the HOST (apt package,
+# not containerized), terminating TLS via certbot + proxying to 127.0.0.1:12000.
+# See nginx.conf in this repo for the equivalent host-level config (deployed
+# to /etc/nginx/conf.d/trading-bot.conf) and docs on the migration.
+
+networks:
+  trading-network:
+    driver: bridge
