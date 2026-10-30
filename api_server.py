@@ -392,15 +392,14 @@ async def stop_agent():
     return ok({"message": "AI agent stopped"})
 
 
-@app.get("/api/agent", tags=["AI Agent"],
-        summary="Current AI agent status, equity and positions")
-async def get_agent():
+def _agent_status_snapshot() -> dict:
+    """Shared by GET /api/agent and the daily alert digest."""
     running = agent_task is not None and not agent_task.done()
     if not agent_engine:
-        return ok({"running": False, "positions": [], "equity": 0.0,
-                   "total_pnl": 0.0, "daily_pnl": 0.0, "halted": False})
+        return {"running": False, "positions": [], "equity": 0.0,
+               "total_pnl": 0.0, "daily_pnl": 0.0, "halted": False}
     e = agent_engine
-    return ok({
+    return {
         "running": running,
         "halted": e.state.halted,
         "equity": round(e.broker.equity, 2),
@@ -414,7 +413,13 @@ async def get_agent():
         "config": {"universe": e.config.universe, "cycle_interval_sec": e.config.cycle_interval_sec,
                    "max_position_pct": e.config.max_position_pct,
                    "max_drawdown_kill": e.config.max_drawdown_kill},
-    })
+    }
+
+
+@app.get("/api/agent", tags=["AI Agent"],
+        summary="Current AI agent status, equity and positions")
+async def get_agent():
+    return ok(_agent_status_snapshot())
 
 
 @app.get("/api/agent/decisions", tags=["AI Agent"],
@@ -429,6 +434,45 @@ async def get_agent_decisions(limit: int = 50):
         return ok({"decisions": AgentDecisionLogRepository().get_recent(limit)})
     except Exception as exc:
         raise HTTPException(500, f"Failed to read agent decision log: {exc}")
+
+
+# ── AI agent daily email digest (monitoring) ────────────────────────────────
+agent_alert_task: Optional[asyncio.Task] = None
+
+
+def _run_agent_alert(force: bool = False) -> dict:
+    """Blocking: pull today's decision log + status, send the digest email."""
+    from backend.alerts.agent_alert import run_once
+    from backend.persistence.database import init_db
+    from backend.persistence.repository import AgentDecisionLogRepository
+    init_db()
+    decisions = AgentDecisionLogRepository().get_recent(limit=100)
+    return run_once(decisions, _agent_status_snapshot(), force=force)
+
+
+@app.post("/api/agent/alert/test", tags=["AI Agent"], summary="Send a test agent digest email now")
+async def test_agent_alert():
+    """Force-send today's agent digest immediately (to verify SMTP delivery)."""
+    res = await asyncio.to_thread(_run_agent_alert, True)
+    if not res.get("smtp_configured"):
+        raise HTTPException(400, "SMTP não configurado (defina SMTP_HOST/SMTP_USER/SMTP_PASS/ALERT_TO)")
+    return ok(res)
+
+
+async def _agent_alert_loop():
+    """Daily AI-agent digest email at AGENT_ALERT_HOUR (UTC)."""
+    hour = int(os.getenv("AGENT_ALERT_HOUR", "22"))
+    while True:
+        now = datetime.utcnow()
+        target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        await asyncio.sleep(max(60, (target - now).total_seconds()))
+        try:
+            res = await asyncio.to_thread(_run_agent_alert, False)
+            logger.info(f"agent alert: {res.get('subject')} (sent={res.get('sent')})")
+        except Exception as exc:
+            logger.warning(f"agent alert loop error: {exc}")
 
 
 # ── Order book collector (parallel data-accumulation track) ─────────────────
@@ -558,7 +602,7 @@ async def _autostart():
     cross-sectional engine stays intact and startable manually via
     POST /api/portfolio/start, but is no longer auto-launched) — revert by
     flipping these two env vars back, no code change needed."""
-    global regime_alert_task
+    global regime_alert_task, agent_alert_task
     if os.getenv("AUTOSTART_COLLECTOR", "1") != "0":
         try:
             msg = await _launch_collector()
@@ -577,6 +621,12 @@ async def _autostart():
             logger.info("autostart: AI agent started")
         except Exception as exc:
             logger.warning(f"autostart AI agent failed: {exc}")   # e.g. Azure creds missing — never blocks API boot
+    if os.getenv("AUTOSTART_AGENT_ALERT", "1") != "0":
+        try:
+            agent_alert_task = asyncio.create_task(_agent_alert_loop())
+            logger.info("autostart: AI agent alert loop started")
+        except Exception as exc:
+            logger.warning(f"autostart agent alert failed: {exc}")
     if os.getenv("AUTOSTART_REGIME_ALERT", "1") != "0":
         try:
             regime_alert_task = asyncio.create_task(_regime_alert_loop())
