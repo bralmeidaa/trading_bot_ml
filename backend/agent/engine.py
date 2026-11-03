@@ -22,6 +22,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional
+from zoneinfo import ZoneInfo
 
 from backend.agent import guardrails
 from backend.agent.llm_client import AgentLLMClient
@@ -36,7 +37,16 @@ paper order or hold. Only trade symbols you're given tools for. Always call \
 `hold` with a rationale if you see no clear reason to trade — doing nothing \
 is a normal, good outcome. Never invent prices, news, or positions — only \
 use what the tools return. Keep position sizes modest; you do not need to \
-use your full size allowance."""
+use your full size allowance.
+
+Each news item from get_news_digest includes `cycles_since_first_seen`. 0 \
+means genuinely new this cycle. If it's greater than 0, that story is \
+already known/priced-in — do not use it alone, again, to open a new \
+position or add to an existing one. Only act on an aging story if you also \
+cite fresh evidence from get_market_context (the current price move) \
+showing the market is still actively reacting, and say so explicitly in \
+the rationale. Simply restating an old headline is not a valid rationale \
+for a new trade."""
 
 
 @dataclass
@@ -44,6 +54,16 @@ class AgentConfig:
     universe: List[str] = field(default_factory=lambda: list(guardrails.SYMBOL_ALLOWLIST))
     total_capital: float = 500.0            # separate dedicated paper book from the $1500 cross-sectional one
     cycle_interval_sec: int = 3600          # hourly — see plan for rationale (not HFT, caps LLM cost)
+    # Crypto trades 24/7, so the mark-to-market/kill-switch check always runs
+    # every cycle regardless of time — only the LLM-call cadence slows down
+    # outside business hours, as a token-cost lever. Never fully stop: open
+    # positions still need monitoring nights/weekends (thin liquidity is
+    # exactly when crypto makes its sharpest moves).
+    off_hours_cycle_interval_sec: int = 4 * 3600
+    business_hours_start: int = 6
+    business_hours_end: int = 19
+    business_days: tuple = (0, 1, 2, 3, 4)   # Mon=0 .. Fri=4
+    timezone: str = "America/Sao_Paulo"
     max_position_pct: float = 0.15
     max_open_positions: int = 3
     daily_loss_limit: float = 0.05
@@ -60,6 +80,7 @@ class AgentState:
     trades_today: int = 0
     llm_calls_today: int = 0
     tokens_today: int = 0
+    news_first_seen_cycle: dict = field(default_factory=dict)  # url/title -> cycle first seen
 
 
 class AIAgentEngine:
@@ -109,6 +130,25 @@ class AIAgentEngine:
             return "llm_call_budget"
         return None
 
+    def _annotate_news(self, items: List[dict]) -> List[dict]:
+        """Tag each news item with how many cycles ago it was first seen, so
+        the model can tell a genuinely new headline from one it has already
+        reacted to in a prior cycle. Prunes entries no longer in `items` —
+        they've aged out of the source's lookback window already."""
+        cycle = self.state.cycle_count
+        tracker = self.state.news_first_seen_cycle
+        out = []
+        kept_keys = set()
+        for item in items:
+            key = item.get("url") or item.get("title")
+            first_seen = tracker.setdefault(key, cycle)
+            kept_keys.add(key)
+            item = dict(item)
+            item["cycles_since_first_seen"] = cycle - first_seen
+            out.append(item)
+        self.state.news_first_seen_cycle = {k: v for k, v in tracker.items() if k in kept_keys}
+        return out
+
     def _order_guardrail_check(self, payload: dict):
         return guardrails.validate_order_request(
             payload, equity=self.broker.equity, open_notional=self.broker.open_notional(),
@@ -117,13 +157,23 @@ class AIAgentEngine:
         )
 
     # ── live loop ────────────────────────────────────────────────────────
+    def is_business_hours(self, now: Optional[datetime] = None) -> bool:
+        now = now or datetime.now(ZoneInfo(self.config.timezone))
+        return (now.weekday() in self.config.business_days
+                and self.config.business_hours_start <= now.hour < self.config.business_hours_end)
+
+    def current_cycle_interval(self) -> int:
+        return (self.config.cycle_interval_sec if self.is_business_hours()
+                else self.config.off_hours_cycle_interval_sec)
+
     async def start(self):
         logger.info(f"🤖 AI agent engine starting (PAPER, {len(self.config.universe)} symbols, "
-                    f"cycle every {self.config.cycle_interval_sec}s)")
+                    f"cycle every {self.config.cycle_interval_sec}s business hours / "
+                    f"{self.config.off_hours_cycle_interval_sec}s off-hours)")
         try:
             while not self.state.halted:
                 await self._cycle()
-                await asyncio.sleep(self.config.cycle_interval_sec)
+                await asyncio.sleep(self.current_cycle_interval())
         except asyncio.CancelledError:
             logger.info("AI agent engine cancelled")
         except Exception as exc:
@@ -157,7 +207,8 @@ class AIAgentEngine:
 
     async def _run_llm_turn(self):
         guardrail_check = self._order_guardrail_check
-        dispatch = build_tool_dispatch(self.config.universe, self.exchange, self.broker, guardrail_check)
+        dispatch = build_tool_dispatch(self.config.universe, self.exchange, self.broker,
+                                       guardrail_check, news_tracker=self._annotate_news)
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": (

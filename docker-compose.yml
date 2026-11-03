@@ -28,6 +28,14 @@ services:
       - AZURE_AI_FOUNDRY_API_VERSION=${AZURE_AI_FOUNDRY_API_VERSION:-2024-10-21}
       - AGENT_TOTAL_CAPITAL=${AGENT_TOTAL_CAPITAL:-500.0}
       - AGENT_CYCLE_INTERVAL_SEC=${AGENT_CYCLE_INTERVAL_SEC:-3600}
+      # Outside business hours, LLM decision cycles slow down (token-cost
+      # lever) but the engine itself keeps running — mark-to-market and the
+      # drawdown kill-switch still check every cycle, since crypto trades
+      # 24/7 and open positions still need a safety net nights/weekends.
+      - AGENT_OFF_HOURS_CYCLE_INTERVAL_SEC=${AGENT_OFF_HOURS_CYCLE_INTERVAL_SEC:-14400}
+      - AGENT_BUSINESS_HOURS_START=${AGENT_BUSINESS_HOURS_START:-6}
+      - AGENT_BUSINESS_HOURS_END=${AGENT_BUSINESS_HOURS_END:-19}
+      - AGENT_TIMEZONE=${AGENT_TIMEZONE:-America/Sao_Paulo}
       - AGENT_MAX_LLM_CALLS_PER_DAY=${AGENT_MAX_LLM_CALLS_PER_DAY:-150}
       # Paper-trading DB on the SAME persistent host mount as the order book, so
       # equity/trades/stats survive redeploys (default ./trading_bot.db lived in

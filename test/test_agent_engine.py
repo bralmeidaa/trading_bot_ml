@@ -10,6 +10,8 @@ No pytest-asyncio marker needed (none is used elsewhere in this repo) —
 engine._cycle() is driven via asyncio.run() from a plain sync test function.
 """
 import asyncio
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -177,6 +179,79 @@ class TestRejectedOrderFlow:
 
         assert engine.broker.open_trades == {}
         assert "allow-list" in decision_repo.calls[-1]["guardrail_rejections"]
+
+
+class TestNewsStalenessTracking:
+    def test_item_seen_for_first_time_is_zero_cycles_old(self, mock_llm_client, fake_exchange):
+        engine = _make_engine(mock_llm_client, fake_exchange)
+        engine.state.cycle_count = 1
+
+        out = engine._annotate_news([{"url": "https://x/1", "title": "hack"}])
+
+        assert out[0]["cycles_since_first_seen"] == 0
+
+    def test_item_seen_in_a_later_cycle_ages(self, mock_llm_client, fake_exchange):
+        engine = _make_engine(mock_llm_client, fake_exchange)
+        engine.state.cycle_count = 1
+        engine._annotate_news([{"url": "https://x/1", "title": "hack"}])
+
+        engine.state.cycle_count = 4
+        out = engine._annotate_news([{"url": "https://x/1", "title": "hack"}])
+
+        assert out[0]["cycles_since_first_seen"] == 3
+
+    def test_item_dropping_out_of_window_is_pruned_from_tracker(self, mock_llm_client, fake_exchange):
+        engine = _make_engine(mock_llm_client, fake_exchange)
+        engine.state.cycle_count = 1
+        engine._annotate_news([{"url": "https://x/old", "title": "old"}])
+
+        engine.state.cycle_count = 2
+        engine._annotate_news([{"url": "https://x/new", "title": "new"}])  # old no longer in the digest
+
+        assert "https://x/old" not in engine.state.news_first_seen_cycle
+        assert "https://x/new" in engine.state.news_first_seen_cycle
+
+    def test_item_without_url_falls_back_to_title_as_key(self, mock_llm_client, fake_exchange):
+        engine = _make_engine(mock_llm_client, fake_exchange)
+        engine.state.cycle_count = 1
+        engine._annotate_news([{"title": "hack", "url": ""}])
+
+        engine.state.cycle_count = 2
+        out = engine._annotate_news([{"title": "hack", "url": ""}])
+
+        assert out[0]["cycles_since_first_seen"] == 1
+
+
+class TestBusinessHoursCadence:
+    TZ = ZoneInfo("America/Sao_Paulo")
+
+    def test_weekday_inside_window_is_business_hours(self, mock_llm_client, fake_exchange):
+        engine = _make_engine(mock_llm_client, fake_exchange)
+        wednesday_noon = datetime(2026, 11, 4, 12, 0, tzinfo=self.TZ)   # 2026-11-04 is a Wednesday
+        assert engine.is_business_hours(wednesday_noon) is True
+
+    def test_weekday_before_opening_is_off_hours(self, mock_llm_client, fake_exchange):
+        engine = _make_engine(mock_llm_client, fake_exchange)
+        wednesday_5am = datetime(2026, 11, 4, 5, 0, tzinfo=self.TZ)
+        assert engine.is_business_hours(wednesday_5am) is False
+
+    def test_weekday_after_closing_is_off_hours(self, mock_llm_client, fake_exchange):
+        engine = _make_engine(mock_llm_client, fake_exchange)
+        wednesday_8pm = datetime(2026, 11, 4, 20, 0, tzinfo=self.TZ)
+        assert engine.is_business_hours(wednesday_8pm) is False
+
+    def test_saturday_is_off_hours_even_during_window(self, mock_llm_client, fake_exchange):
+        engine = _make_engine(mock_llm_client, fake_exchange)
+        saturday_noon = datetime(2026, 11, 7, 12, 0, tzinfo=self.TZ)
+        assert engine.is_business_hours(saturday_noon) is False
+
+    def test_current_cycle_interval_switches_with_business_hours(self, mock_llm_client, fake_exchange):
+        engine = _make_engine(mock_llm_client, fake_exchange,
+                              cycle_interval_sec=3600, off_hours_cycle_interval_sec=14400)
+        engine.is_business_hours = lambda now=None: True
+        assert engine.current_cycle_interval() == 3600
+        engine.is_business_hours = lambda now=None: False
+        assert engine.current_cycle_interval() == 14400
 
 
 class TestLLMErrorDegradesGracefully:

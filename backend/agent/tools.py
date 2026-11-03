@@ -12,7 +12,7 @@ tool, not more numeric features.
 from __future__ import annotations
 
 import logging
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional
 
 from backend.agent.guardrails import SYMBOL_ALLOWLIST
 from backend.agent.news_sources import digest_for_symbols
@@ -98,12 +98,17 @@ TOOL_SCHEMAS: List[dict] = [
 
 
 def build_tool_dispatch(universe: List[str], exchange, broker: PaperBroker,
-                        guardrail_check: Callable[[dict], tuple]) -> Dict[str, Callable[[dict], dict]]:
+                        guardrail_check: Callable[[dict], tuple],
+                        news_tracker: Optional[Callable[[List[dict]], List[dict]]] = None,
+                        ) -> Dict[str, Callable[[dict], dict]]:
     """
     Build the name->handler map passed to AgentLLMClient.chat_with_tools.
     `guardrail_check(payload) -> (ok: bool, reason: str)` is injected so this
     module doesn't need to know the engine's current equity/open-notional —
     the engine closes over that state when constructing the check.
+    `news_tracker(items) -> items`, if given, annotates each news item with
+    how many cycles ago it was first seen (so the model can tell a fresh
+    headline from one it already reacted to).
     """
 
     def _get_market_context(args: dict) -> dict:
@@ -126,7 +131,10 @@ def build_tool_dispatch(universe: List[str], exchange, broker: PaperBroker,
 
     def _get_news_digest(args: dict) -> dict:
         hours = args.get("hours", 24)
-        return {"news": digest_for_symbols(universe, hours=hours)}
+        items = digest_for_symbols(universe, hours=hours)
+        if news_tracker:
+            items = news_tracker(items)
+        return {"news": items}
 
     def _get_positions(args: dict) -> dict:
         return {"equity": broker.equity, "positions": broker.positions()}

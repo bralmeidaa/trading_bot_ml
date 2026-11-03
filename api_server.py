@@ -362,6 +362,10 @@ async def start_agent():
         cfg = AgentConfig(
             total_capital=float(os.getenv("AGENT_TOTAL_CAPITAL", "500.0")),
             cycle_interval_sec=int(os.getenv("AGENT_CYCLE_INTERVAL_SEC", "3600")),
+            off_hours_cycle_interval_sec=int(os.getenv("AGENT_OFF_HOURS_CYCLE_INTERVAL_SEC", str(4 * 3600))),
+            business_hours_start=int(os.getenv("AGENT_BUSINESS_HOURS_START", "6")),
+            business_hours_end=int(os.getenv("AGENT_BUSINESS_HOURS_END", "19")),
+            timezone=os.getenv("AGENT_TIMEZONE", "America/Sao_Paulo"),
             max_llm_calls_per_day=int(os.getenv("AGENT_MAX_LLM_CALLS_PER_DAY", "150")),
         )
         exchange = await asyncio.to_thread(lambda: ccxt.binance({"enableRateLimit": True}))
@@ -372,6 +376,7 @@ async def start_agent():
         agent_task = asyncio.create_task(agent_engine.start())
         return ok({"message": "AI agent started (paper)", "universe": cfg.universe,
                    "cycle_interval_sec": cfg.cycle_interval_sec,
+                   "off_hours_cycle_interval_sec": cfg.off_hours_cycle_interval_sec,
                    "model_deployment": llm_cfg.deployment})
     except HTTPException:
         raise
@@ -411,6 +416,8 @@ def _agent_status_snapshot() -> dict:
         "llm_calls_today": e.state.llm_calls_today,
         "positions": e.positions(),
         "config": {"universe": e.config.universe, "cycle_interval_sec": e.config.cycle_interval_sec,
+                   "off_hours_cycle_interval_sec": e.config.off_hours_cycle_interval_sec,
+                   "is_business_hours": e.is_business_hours(),
                    "max_position_pct": e.config.max_position_pct,
                    "max_drawdown_kill": e.config.max_drawdown_kill},
     }
