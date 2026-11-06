@@ -27,7 +27,7 @@ services:
       - AZURE_AI_FOUNDRY_DEPLOYMENT=${AZURE_AI_FOUNDRY_DEPLOYMENT:-gpt-5-mini}
       - AZURE_AI_FOUNDRY_API_VERSION=${AZURE_AI_FOUNDRY_API_VERSION:-2024-10-21}
       - AGENT_TOTAL_CAPITAL=${AGENT_TOTAL_CAPITAL:-500.0}
-      - AGENT_CYCLE_INTERVAL_SEC=${AGENT_CYCLE_INTERVAL_SEC:-3600}
+      - AGENT_CYCLE_INTERVAL_SEC=${AGENT_CYCLE_INTERVAL_SEC:-600}
       # Outside business hours, LLM decision cycles slow down (token-cost
       # lever) but the engine itself keeps running — mark-to-market and the
       # drawdown kill-switch still check every cycle, since crypto trades

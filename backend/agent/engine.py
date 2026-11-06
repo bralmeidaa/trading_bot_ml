@@ -46,7 +46,13 @@ position or add to an existing one. Only act on an aging story if you also \
 cite fresh evidence from get_market_context (the current price move) \
 showing the market is still actively reacting, and say so explicitly in \
 the rationale. Simply restating an old headline is not a valid rationale \
-for a new trade."""
+for a new trade.
+
+Cycles run frequently during business hours. This is intentional: short, \
+tactical trades — opened and closed within the same day, including ones \
+that go against the slower multi-day narrative — are an expected and \
+valid use of this cadence, as long as they're grounded in the current \
+price/order-book snapshot, not in stale news or an old multi-day thesis."""
 
 
 @dataclass
