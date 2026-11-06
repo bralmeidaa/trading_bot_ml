@@ -1,0 +1,235 @@
+# Azure DevOps Pipeline for Trading Bot ML
+#
+# *** TEMPORARY SELF-HOSTED FALLBACK (2026-10-29) ***
+# The Microsoft-hosted pool ("Azure Pipelines") has no free parallelism
+# grant approved yet for this org — builds queue forever (notStarted).
+# Microsoft requires a manual request form for free hosted CI minutes
+# (https://aka.ms/azpipelines-parallelism-request), which can take hours to
+# a few business days to approve. Rather than block on that, this pipeline
+# temporarily runs self-hosted on the Hetzner VM itself (agent
+# "hetzner-trading-vm", pool "trading-bot-ml-vm") — the SAME coupling of
+# CI to the app host that caused the whole incident this session started
+# from (self-hosted agent died with the old OCI VM). This is a deliberate,
+# known regression, not a forgotten one.
+#
+# TO REVERT once the parallelism grant is approved: see git history for the
+# Microsoft-hosted + QEMU + SSH-deploy version of this file (commit
+# 5d11f30), or re-ask for it — it builds via QEMU (tonistiigi/binfmt,
+# buildx) since there's still no GA Microsoft-hosted ARM64 Linux pool, and
+# deploys over SSH to a dedicated service connection ("hetzner-trading-vm",
+# already created in this Azure DevOps project).
+#
+# While self-hosted: build is NATIVE arm64 (no QEMU needed, the VM IS arm64)
+# and deploy runs directly in the same checked-out workspace (no SSH needed
+# — the agent already *is* the target machine), matching the pre-incident
+# pipeline's structure.
+
+# trigger:
+#   branches:
+#     include:
+#     - main
+#     - develop
+#   paths:
+#     exclude:
+#     - README.md
+#     - docs/*
+
+pool:
+  name: 'trading-bot-ml-vm'
+
+variables:
+  - group: trading-bot-vg
+  - name: deploymentPath
+    value: '/opt/trading-bot-ml'
+  - name: imageRepository
+    value: 'bralmeida/trading-bot-ml'
+  - name: dockerImageLatestTag
+    value: 'latest'
+  - name: dockerfilePath
+    value: './Dockerfile'
+
+stages:
+- stage: Build
+  displayName: 'Build and Test'
+  jobs:
+  - job: BuildJob
+    displayName: 'Build Docker Image'
+
+    steps:
+    - checkout: self
+      displayName: 'Checkout source code'
+
+    - task: Bash@3
+      displayName: 'Light cleanup (unused images only — never volumes/running containers)'
+      inputs:
+        targetType: 'inline'
+        script: |
+          docker image prune -f || true
+
+    - task: Bash@3
+      displayName: 'Refresh deployment folder'
+      inputs:
+        targetType: 'inline'
+        script: |
+          sudo mkdir -p $(deploymentPath)
+          sudo chown -R $(whoami):$(whoami) $(deploymentPath)
+
+    - task: CopyFiles@2
+      inputs:
+        SourceFolder: '$(System.DefaultWorkingDirectory)'
+        Contents: |
+          **/*
+          !.git/**/*
+          !**/*.md
+          !**/*.*ignore
+        TargetFolder: '$(deploymentPath)'
+        CleanTargetFolder: false
+        OverWrite: true
+        ignoreMakeDirErrors: true
+
+    - task: Docker@2
+      displayName: 'Docker Login'
+      inputs:
+        containerRegistry: 'docker-account-bralmeida'
+        command: 'login'
+
+    - task: Bash@3
+      displayName: 'Build image (native arm64 — this VM IS arm64)'
+      inputs:
+        targetType: 'inline'
+        workingDirectory: '$(deploymentPath)'
+        script: |
+          set -e
+          echo "🔨 Building for linux/arm64 natively (no QEMU needed on this host)..."
+          docker buildx build \
+          --platform linux/arm64 \
+          --tag '$(imageRepository):$(dockerImageLatestTag)' \
+          --file $(dockerfilePath) \
+          --no-cache \
+          --push .
+          echo "✅ Docker image built and pushed successfully!"
+
+    - task: Docker@2
+      displayName: 'Docker Logout'
+      inputs:
+        containerRegistry: 'docker-account-bralmeida'
+        command: 'logout'
+
+- stage: Deploy
+  displayName: 'Deploy'
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+  - deployment: DeployApp
+    displayName: 'Deploy App'
+    environment: 'pre-production'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: Bash@3
+            displayName: 'Render .env'
+            inputs:
+              workingDirectory: '$(deploymentPath)'
+              targetType: 'inline'
+              script: |
+                cat > .env <<'EOL'
+                ENVIRONMENT=production
+                SMTP_HOST=$(SMTP_HOST)
+                SMTP_PORT=$(SMTP_PORT)
+                SMTP_USER=$(SMTP_USER)
+                SMTP_PASS=$(SMTP_PASS)
+                ALERT_TO=$(ALERT_TO)
+                AZURE_AI_FOUNDRY_ENDPOINT=$(AZURE_AI_FOUNDRY_ENDPOINT)
+                AZURE_AI_FOUNDRY_API_KEY=$(AZURE_AI_FOUNDRY_API_KEY)
+                AZURE_AI_FOUNDRY_DEPLOYMENT=$(AZURE_AI_FOUNDRY_DEPLOYMENT)
+                EOL
+                chmod 600 .env
+                ls -la .env
+
+          - task: Bash@3
+            displayName: 'Docker Compose Deploy + nginx reload'
+            inputs:
+              targetType: 'inline'
+              workingDirectory: '$(deploymentPath)'
+              script: |
+                set -e
+
+                echo "📁 Ensuring persistent host data dirs (outside deploy dir, owned by container uid 1000)..."
+                sudo mkdir -p /opt/trading-bot-data/orderbook_data /opt/trading-bot-data/db
+                sudo chown -R 1000:1000 /opt/trading-bot-data
+
+                echo "🔄 Pulling latest image..."
+                docker compose pull
+
+                echo "🚀 Starting new container with fresh image..."
+                docker compose up -d --force-recreate --remove-orphans
+
+                echo "🔧 Sanity-check + reload the host nginx (site config lives in /etc/nginx/conf.d, managed separately)..."
+                sudo nginx -t && sudo systemctl reload nginx || true
+
+                echo "⏳ Waiting for the app to come up..."
+                sleep 15
+                docker compose ps
+                docker compose logs --tail=20
+
+                echo "✅ Deployment completed successfully!"
+
+- stage: Testing
+  displayName: 'App validation'
+  dependsOn: Deploy
+  condition: succeeded()
+  jobs:
+  - job: URLValidation
+    displayName: 'Validate the App URLs'
+    steps:
+          - task: Bash@3
+            displayName: 'Verify Deployment (public HTTPS endpoint)'
+            inputs:
+              targetType: 'inline'
+              script: |
+                echo "🔍 Verifying deployment via https://trading.bratech.me ..."
+
+                response=$(curl -s -o /dev/null -w "%{http_code}" https://trading.bratech.me/api/health || echo "000")
+                if [ "$response" -eq 200 ]; then
+                  echo "✅ API health check passed"
+                else
+                  echo "❌ API health check failed (HTTP $response)"
+                  exit 1
+                fi
+
+                response=$(curl -s -o /dev/null -w "%{http_code}" https://trading.bratech.me/)
+                if [ "$response" -eq 200 ]; then
+                  echo "✅ Dashboard is accessible"
+                  # The app auto-starts collector + AI agent on boot (startup hook).
+                  # Explicit call is belt-and-suspenders (idempotent) — the AGENT is
+                  # the active paper strategy now, not the cross-sectional portfolio.
+                  curl -fsS -X POST https://trading.bratech.me/api/collector/start || true
+                  curl -fsS -X POST https://trading.bratech.me/api/agent/start || true
+                else
+                  echo "❌ Dashboard is not accessible (HTTP $response)"
+                  exit 1
+                fi
+
+                echo "🎉 All verification checks passed!"
+                echo "📊 Dashboard URL: https://trading.bratech.me"
+
+- stage: InitialTShoot
+  displayName: 'InitialTShoot'
+  dependsOn: Testing
+  condition: failed()
+  jobs:
+  - job: RollbackJob
+    displayName: 'Diagnose Deployment Failure'
+    steps:
+    - task: Bash@3
+      displayName: 'Initial Troubleshooting Steps'
+      inputs:
+        targetType: 'inline'
+        workingDirectory: '$(deploymentPath)'
+        script: |
+          echo "📊 Docker system status:"; docker system df
+          echo "📋 Current containers:"; docker compose ps -a
+          echo "📝 Container logs (last 50 lines):"; docker compose logs --tail=50
+          echo "🌐 Local health check:"; curl -v http://127.0.0.1:12000/api/health || echo "Health check failed"
+          echo "🧾 nginx status:"; systemctl status nginx --no-pager | head -10

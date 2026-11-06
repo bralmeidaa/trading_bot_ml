@@ -1,0 +1,51 @@
+================================================================================
+🏆 FINAL TRADING SYSTEM PERFORMANCE REPORT
+================================================================================
+Test Date: 2025-09-17 20:14:50
+Test Duration: 0.03 hours
+
+📊 EXECUTIVE SUMMARY
+----------------------------------------
+Total PnL: $-17.48
+ROI: -1.46%
+Total Trades: 7
+Win Rate: 28.6%
+Sharpe Ratio: -8.40
+Max Drawdown: 2.5%
+
+📈 TRADING ACTIVITY
+----------------------------------------
+Trades Entered: 7
+Trades Completed: 7
+Max Concurrent Trades: 2
+Avg Trade Duration: 0.2 minutes
+
+💰 TRADE ANALYSIS
+----------------------------------------
+Profitable Trades: 2
+Average Win: $13.86
+Losing Trades: 5
+Average Loss: $-9.04
+Profit Factor: 1.53
+
+⏰ HOURLY PERFORMANCE
+----------------------------------------
+Hour  1: PnL $   -5.88 | Equity $ 1194.12 | Trades   3
+Hour  2: PnL $  -12.93 | Equity $ 1187.07 | Trades   4
+Hour  3: PnL $  -28.84 | Equity $ 1171.16 | Trades   6
+Hour  4: PnL $  -17.48 | Equity $ 1182.52 | Trades   7
+Hour  5: PnL $  -17.48 | Equity $ 1182.52 | Trades   7
+Hour  6: PnL $  -17.48 | Equity $ 1182.52 | Trades   7
+
+✅ SYSTEM ASSESSMENT
+----------------------------------------
+Performance Rating: 🔴 NEEDS IMPROVEMENT
+Win Rate Assessment: 🔴 LOW
+Risk Assessment: 🟢 LOW RISK
+
+🎯 RECOMMENDATIONS
+----------------------------------------
+• Review and optimize signal generation logic
+• Continue monitoring and optimizing based on market conditions
+
+================================================================================
