@@ -36,6 +36,11 @@ services:
       - AGENT_BUSINESS_HOURS_START=${AGENT_BUSINESS_HOURS_START:-6}
       - AGENT_BUSINESS_HOURS_END=${AGENT_BUSINESS_HOURS_END:-19}
       - AGENT_TIMEZONE=${AGENT_TIMEZONE:-America/Sao_Paulo}
+      # Calibrated for the old 1h cadence; at 10min cycles it was being hit
+      # by ~11am BRT and blocking the rest of the day. Raised per explicit
+      # request after 09/11 showed trade quality held up at higher
+      # frequency — lower this back down if quality degrades.
+      - AGENT_MAX_TRADES_PER_DAY=${AGENT_MAX_TRADES_PER_DAY:-50}
       - AGENT_MAX_LLM_CALLS_PER_DAY=${AGENT_MAX_LLM_CALLS_PER_DAY:-150}
       # Paper-trading DB on the SAME persistent host mount as the order book, so
       # equity/trades/stats survive redeploys (default ./trading_bot.db lived in

@@ -366,6 +366,7 @@ async def start_agent():
             business_hours_start=int(os.getenv("AGENT_BUSINESS_HOURS_START", "6")),
             business_hours_end=int(os.getenv("AGENT_BUSINESS_HOURS_END", "19")),
             timezone=os.getenv("AGENT_TIMEZONE", "America/Sao_Paulo"),
+            max_trades_per_day=int(os.getenv("AGENT_MAX_TRADES_PER_DAY", "10")),
             max_llm_calls_per_day=int(os.getenv("AGENT_MAX_LLM_CALLS_PER_DAY", "150")),
         )
         exchange = await asyncio.to_thread(lambda: ccxt.binance({"enableRateLimit": True}))
@@ -419,6 +420,7 @@ def _agent_status_snapshot() -> dict:
                    "off_hours_cycle_interval_sec": e.config.off_hours_cycle_interval_sec,
                    "is_business_hours": e.is_business_hours(),
                    "max_position_pct": e.config.max_position_pct,
+                   "max_trades_per_day": e.config.max_trades_per_day,
                    "max_drawdown_kill": e.config.max_drawdown_kill},
     }
 
