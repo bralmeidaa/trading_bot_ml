@@ -39,6 +39,19 @@ trigger:
 
 pr: none
 
+# Safety net: the GitHub App push trigger has missed several pushes (it only
+# fires intermittently). This schedule makes Azure check main itself every
+# 15 min and run only if there is a commit it hasn't run on schedule yet. The
+# Gate stage below skips build+deploy when that commit is already deployed,
+# so a push caught by both the trigger and the schedule deploys once.
+schedules:
+- cron: "*/15 * * * *"
+  displayName: 'Deploy safety net (missed push triggers)'
+  branches:
+    include:
+    - main
+  always: false
+
 pool:
   name: 'trading-bot-ml-vm'
 
@@ -54,8 +67,33 @@ variables:
     value: './Dockerfile'
 
 stages:
+- stage: Gate
+  displayName: 'Skip if already deployed'
+  jobs:
+  - job: GateJob
+    steps:
+    - checkout: none
+    - task: Bash@3
+      name: check
+      displayName: 'Compare commit with the deployed one'
+      inputs:
+        targetType: 'inline'
+        script: |
+          deployed=$(cat /opt/trading-bot-data/deployed_sha 2>/dev/null || true)
+          skip=false
+          # manual runs always deploy (explicit intent); push/schedule runs skip a commit already live
+          if [ "$deployed" = "$(Build.SourceVersion)" ] && [ "$(Build.Reason)" != "Manual" ]; then
+            skip=true
+            echo "⏭️  $(Build.SourceVersion) is already deployed — skipping build and deploy"
+          else
+            echo "▶️  deployed=${deployed:-none} building=$(Build.SourceVersion) reason=$(Build.Reason)"
+          fi
+          echo "##vso[task.setvariable variable=skip;isOutput=true]$skip"
+
 - stage: Build
   displayName: 'Build and Test'
+  dependsOn: Gate
+  condition: and(succeeded(), ne(dependencies.Gate.outputs['GateJob.check.skip'], 'true'))
   jobs:
   - job: BuildJob
     displayName: 'Build Docker Image'
@@ -178,7 +216,8 @@ stages:
                 docker compose ps
                 docker compose logs --tail=20
 
-                echo "✅ Deployment completed successfully!"
+                echo "$(Build.SourceVersion)" | sudo tee /opt/trading-bot-data/deployed_sha > /dev/null
+                echo "✅ Deployment completed successfully! ($(Build.SourceVersion))"
 
 - stage: Testing
   displayName: 'App validation'
