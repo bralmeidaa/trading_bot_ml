@@ -24,15 +24,20 @@
 # — the agent already *is* the target machine), matching the pre-incident
 # pipeline's structure.
 
-# trigger:
-#   branches:
-#     include:
-#     - main
-#     - develop
-#   paths:
-#     exclude:
-#     - README.md
-#     - docs/*
+# main is the only deploy branch: a push there builds and deploys.
+trigger:
+  branches:
+    include:
+    - main
+  paths:
+    exclude:
+    - README.md
+    - docs/*
+    - reports/*
+    - research_notes/*
+    - .claude/*
+
+pr: none
 
 pool:
   name: 'trading-bot-ml-vm'
