@@ -116,3 +116,16 @@ class TestComposeMessage:
         digest = build_digest(decisions, RUNNING_STATUS, today="2026-10-29")
         _, body = compose_message(digest)
         assert "symbol not allowed" in body
+
+
+class TestV2Digest:
+    def test_close_tool_counts_as_trade(self):
+        decisions = [_decision(executed=[{"name": "close_paper_position", "output": {"executed": True}}])]
+        digest = build_digest(decisions, RUNNING_STATUS, today="2026-10-29")
+        assert len(digest["trades"]) == 1
+
+    def test_realized_and_exits_line(self):
+        status = {**RUNNING_STATUS, "realized_pnl_today": 3.5, "exits_today": {"stop": 1, "target": 2}}
+        _, body = compose_message(build_digest([], status, today="2026-10-29"))
+        assert "PnL realizado hoje: $+3.50" in body
+        assert "stop: 1" in body and "target: 2" in body

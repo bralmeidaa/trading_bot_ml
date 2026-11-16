@@ -44,8 +44,8 @@ def build_digest(decisions: List[dict], status: dict, today: Optional[str] = Non
     for d in todays:
         executed = _parse_json_field(d.get("tool_calls_executed"), [])
         rejected = _parse_json_field(d.get("guardrail_rejections"), [])
-        if any(c.get("name") == "place_paper_order" and c.get("output", {}).get("executed")
-              for c in executed):
+        if any(c.get("name") in ("place_paper_order", "close_paper_position")
+               and c.get("output", {}).get("executed") for c in executed):
             trades.append(d)
         elif d.get("halted_reason"):
             halts.append(d)
@@ -71,6 +71,8 @@ def build_digest(decisions: List[dict], status: dict, today: Optional[str] = Non
         "equity": status.get("equity", 0.0),
         "total_pnl": status.get("total_pnl", 0.0),
         "daily_pnl": status.get("daily_pnl", 0.0),
+        "realized_pnl_today": status.get("realized_pnl_today"),
+        "exits_today": status.get("exits_today") or {},
         "positions": status.get("positions", []),
         "running": status.get("running", False),
         "halted": status.get("halted", False),
@@ -98,12 +100,20 @@ def compose_message(digest: dict) -> tuple[str, str]:
         f"PnL hoje: ${digest['daily_pnl']:+,.2f}",
         f"Chamadas LLM hoje: {digest['llm_calls']}  |  Tokens: {digest['tokens']:,}",
     ]
+    if digest.get("realized_pnl_today") is not None:
+        exits = digest.get("exits_today") or {}
+        exits_txt = ", ".join(f"{k}: {v}" for k, v in sorted(exits.items())) or "nenhuma"
+        lines.append(f"PnL realizado hoje: ${digest['realized_pnl_today']:+,.2f}  |  "
+                     f"Saídas hoje: {exits_txt}")
 
     if digest["positions"]:
         lines += ["", "Posições abertas:"]
         for p in digest["positions"]:
+            bracket = ""
+            if p.get("stop_loss") or p.get("take_profit"):
+                bracket = f" (stop {p.get('stop_loss')} / alvo {p.get('take_profit')})"
             lines.append(f"  {p.get('symbol')}: {p.get('side')} ${p.get('notional', 0):,.2f} "
-                        f"@ {p.get('entry_price')}")
+                        f"@ {p.get('entry_price')}{bracket}")
 
     if digest["trades"]:
         lines += ["", "Trades executados hoje:"]

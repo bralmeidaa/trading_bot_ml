@@ -254,6 +254,101 @@ class TestBusinessHoursCadence:
         assert engine.current_cycle_interval() == 14400
 
 
+class TestBracketAndExits:
+    def test_prepare_order_fills_atr_default_when_omitted(self, mock_llm_client, fake_exchange):
+        engine = _make_engine(mock_llm_client, fake_exchange)
+        args = engine._prepare_order({"symbol": "BTC/USDT", "side": "buy", "notional_usd": 50})
+        # fake ATR ≈ 1% → 1.5×ATR = 1.5% (above the 1.2% floor), target keeps 2.5/1.5 ratio
+        assert args["stop_pct"] == pytest.approx(0.015, rel=0.05)
+        assert args["target_pct"] == pytest.approx(args["stop_pct"] * 2.5 / 1.5)
+
+    def test_prepare_order_respects_model_values(self, mock_llm_client, fake_exchange):
+        engine = _make_engine(mock_llm_client, fake_exchange)
+        args = engine._prepare_order({"symbol": "BTC/USDT", "stop_pct": 0.03, "target_pct": 0.09})
+        assert (args["stop_pct"], args["target_pct"]) == (0.03, 0.09)
+
+    def test_executed_order_has_stop_and_target(self, mock_llm_client, fake_exchange):
+        engine = _make_engine(mock_llm_client, fake_exchange)
+        mock_llm_client.chat_with_tools = _stub_that_calls_tool(
+            "place_paper_order",
+            {"symbol": "BTC/USDT", "side": "buy", "notional_usd": 50.0, "rationale": "t"},
+        )
+        asyncio.run(engine._cycle())
+        trade = engine.broker.open_trades["BTC/USDT"]
+        assert trade.stop_loss > 0 and trade.take_profit > trade.entry_price
+        assert trade.bot_id == "ai_agent_v2"
+
+    def test_exit_monitor_closes_on_stop_without_llm(self, mock_llm_client, fake_exchange):
+        engine = _make_engine(mock_llm_client, fake_exchange)
+        engine.broker.place_order("BTC/USDT", "buy", 50.0, "t", stop_pct=0.02, target_pct=0.04)
+        fake_exchange.prices["BTC/USDT"] = 45000.0      # -10%
+        asyncio.run(engine._exit_check())
+        assert engine.broker.open_trades == {}
+        assert engine.broker.closed_trades[-1].reason == "stop"
+        assert mock_llm_client.calls == []
+        assert engine.state.last_exit_check is not None
+
+    def test_stop_triggers_cooldown_on_next_order(self, mock_llm_client, fake_exchange):
+        engine = _make_engine(mock_llm_client, fake_exchange)
+        engine.broker.place_order("BTC/USDT", "buy", 50.0, "t", stop_pct=0.02, target_pct=0.04)
+        fake_exchange.prices["BTC/USDT"] = 45000.0
+        asyncio.run(engine._exit_check())
+        ok, reason = engine._order_guardrail_check(engine._prepare_order(
+            {"symbol": "BTC/USDT", "side": "buy", "notional_usd": 50.0}))
+        assert not ok and "cooldown" in reason
+
+    def test_close_tool_realizes_and_counts_as_trade(self, mock_llm_client, fake_exchange):
+        engine = _make_engine(mock_llm_client, fake_exchange)
+        engine.broker.place_order("BTC/USDT", "buy", 50.0, "t", stop_pct=0.02, target_pct=0.04)
+        mock_llm_client.chat_with_tools = _stub_that_calls_tool(
+            "close_paper_position", {"symbol": "BTC/USDT", "rationale": "thesis gone"})
+        asyncio.run(engine._cycle())
+        assert engine.broker.open_trades == {}
+        assert engine.broker.closed_trades[-1].reason.startswith("llm")
+        assert engine.state.trades_today == 1
+
+    def test_close_tool_on_flat_symbol_is_rejected(self, mock_llm_client, fake_exchange):
+        decision_repo = FakeDecisionRepo()
+        engine = _make_engine(mock_llm_client, fake_exchange, decision_repo)
+        mock_llm_client.chat_with_tools = _stub_that_calls_tool(
+            "close_paper_position", {"symbol": "BTC/USDT", "rationale": "x"})
+        asyncio.run(engine._cycle())
+        assert "no open position" in decision_repo.calls[-1]["guardrail_rejections"]
+
+
+class TestResilience:
+    def test_cycle_exception_does_not_kill_loop(self, mock_llm_client, fake_exchange):
+        engine = _make_engine(mock_llm_client, fake_exchange, cycle_interval_sec=0,
+                              off_hours_cycle_interval_sec=0, exit_check_interval_sec=0)
+        calls = {"n": 0}
+
+        async def flaky_cycle():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("boom")
+            engine.state.halted = True
+
+        engine._cycle = flaky_cycle
+        asyncio.run(asyncio.wait_for(engine.start(), timeout=5))
+        assert calls["n"] == 2
+
+    def test_restore_brings_back_open_positions(self, mock_llm_client, fake_exchange, fresh_db):
+        from backend.persistence.repository import TradeRepository
+        repo = TradeRepository()
+        cfg = AgentConfig()
+        first = AIAgentEngine(cfg, exchange=fake_exchange, llm_client=mock_llm_client, trade_repo=repo)
+        first.broker.place_order("BTC/USDT", "buy", 50.0, "t", stop_pct=0.02, target_pct=0.04)
+        first.broker.place_order("ETH/USDT", "sell", 50.0, "t", stop_pct=0.02, target_pct=0.04)
+        fake_exchange.prices["ETH/USDT"] = 2900.0
+        closed = first.broker.close_position("ETH/USDT", "llm: done")
+
+        second = AIAgentEngine(cfg, exchange=fake_exchange, llm_client=mock_llm_client, trade_repo=repo)
+        assert second.restore() == 1
+        assert set(second.broker.open_trades) == {"BTC/USDT"}
+        assert second.broker.open_trades["BTC/USDT"].stop_loss > 0
+        assert second.broker.realized_pnl() == pytest.approx(closed.pnl)
+
+
 class TestLLMErrorDegradesGracefully:
     def test_azure_error_does_not_crash_cycle(self, mock_llm_client, fake_exchange):
         decision_repo = FakeDecisionRepo()

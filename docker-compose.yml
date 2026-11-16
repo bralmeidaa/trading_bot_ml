@@ -41,6 +41,13 @@ services:
       # request after 09/11 showed trade quality held up at higher
       # frequency — lower this back down if quality degrades.
       - AGENT_MAX_TRADES_PER_DAY=${AGENT_MAX_TRADES_PER_DAY:-50}
+      # v2 book: every position carries an ATR stop/target enforced by a
+      # no-LLM monitor every AGENT_EXIT_CHECK_SEC. Risk per trade and net
+      # directional exposure (BTC/ETH/SOL move together) are capped.
+      - AGENT_EXIT_CHECK_SEC=${AGENT_EXIT_CHECK_SEC:-30}
+      - AGENT_MAX_RISK_PER_TRADE=${AGENT_MAX_RISK_PER_TRADE:-0.01}
+      - AGENT_MAX_NET_EXPOSURE_PCT=${AGENT_MAX_NET_EXPOSURE_PCT:-0.30}
+      - AGENT_BOT_ID=${AGENT_BOT_ID:-ai_agent_v2}
       - AGENT_MAX_LLM_CALLS_PER_DAY=${AGENT_MAX_LLM_CALLS_PER_DAY:-150}
       # Paper-trading DB on the SAME persistent host mount as the order book, so
       # equity/trades/stats survive redeploys (default ./trading_bot.db lived in

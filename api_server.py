@@ -368,16 +368,22 @@ async def start_agent():
             timezone=os.getenv("AGENT_TIMEZONE", "America/Sao_Paulo"),
             max_trades_per_day=int(os.getenv("AGENT_MAX_TRADES_PER_DAY", "10")),
             max_llm_calls_per_day=int(os.getenv("AGENT_MAX_LLM_CALLS_PER_DAY", "150")),
+            exit_check_interval_sec=int(os.getenv("AGENT_EXIT_CHECK_SEC", "30")),
+            max_risk_per_trade=float(os.getenv("AGENT_MAX_RISK_PER_TRADE", "0.01")),
+            max_net_exposure_pct=float(os.getenv("AGENT_MAX_NET_EXPOSURE_PCT", "0.30")),
+            bot_id=os.getenv("AGENT_BOT_ID", "ai_agent_v2"),
         )
         exchange = await asyncio.to_thread(lambda: ccxt.binance({"enableRateLimit": True}))
         llm_client = AgentLLMClient(llm_cfg)
         agent_engine = AIAgentEngine(cfg, exchange=exchange, llm_client=llm_client,
                                      equity_repo=eq_repo, daily_repo=daily_repo,
                                      decision_repo=decision_repo, trade_repo=trade_repo)
+        restored = await asyncio.to_thread(agent_engine.restore)
         agent_task = asyncio.create_task(agent_engine.start())
         return ok({"message": "AI agent started (paper)", "universe": cfg.universe,
                    "cycle_interval_sec": cfg.cycle_interval_sec,
                    "off_hours_cycle_interval_sec": cfg.off_hours_cycle_interval_sec,
+                   "restored_open_positions": restored,
                    "model_deployment": llm_cfg.deployment})
     except HTTPException:
         raise
@@ -391,11 +397,22 @@ async def stop_agent():
     if not agent_task or agent_task.done():
         raise HTTPException(400, "AI agent not running")
     if agent_engine:
-        closed = await asyncio.to_thread(agent_engine.broker.close_all, "manual_stop")
-        agent_engine._persist_closed_trades(closed)
+        await asyncio.to_thread(agent_engine.broker.close_all, "manual_stop")
         agent_engine.state.halted = True
     agent_task.cancel()
     return ok({"message": "AI agent stopped"})
+
+
+@app.on_event("shutdown")
+async def _shutdown_agent():
+    """Redeploys send SIGTERM: stop the loops cleanly. Open positions are
+    already in the DB (persisted on every change) and come back via restore()."""
+    if agent_task and not agent_task.done():
+        agent_task.cancel()
+        try:
+            await asyncio.wait_for(agent_task, timeout=5)
+        except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+            pass
 
 
 def _agent_status_snapshot() -> dict:
@@ -405,21 +422,38 @@ def _agent_status_snapshot() -> dict:
         return {"running": False, "positions": [], "equity": 0.0,
                "total_pnl": 0.0, "daily_pnl": 0.0, "halted": False}
     e = agent_engine
+    realized = e.broker.realized_pnl()
+    closed_today = e.closed_today()
+    exits_today: dict = {}
+    for t in closed_today:
+        kind = "llm" if (t.reason or "").startswith("llm") else (t.reason or "unknown")
+        exits_today[kind] = exits_today.get(kind, 0) + 1
     return {
         "running": running,
         "halted": e.state.halted,
+        "bot_id": e.config.bot_id,
         "equity": round(e.broker.equity, 2),
         "total_pnl": round(e.total_pnl, 2),
+        "realized_pnl": round(realized, 2),
+        "unrealized_pnl": round(e.total_pnl - realized, 2),
         "daily_pnl": round(e.daily_pnl, 2),
+        "realized_pnl_today": round(sum(t.pnl or 0.0 for t in closed_today), 2),
+        "exits_today": exits_today,
         "peak_equity": round(e.broker.peak_equity, 2),
         "cycle_count": e.state.cycle_count,
         "trades_today": e.state.trades_today,
         "llm_calls_today": e.state.llm_calls_today,
+        "last_exit_check": (datetime.utcfromtimestamp(e.state.last_exit_check).isoformat()
+                            if e.state.last_exit_check else None),
         "positions": e.positions(),
         "config": {"universe": e.config.universe, "cycle_interval_sec": e.config.cycle_interval_sec,
                    "off_hours_cycle_interval_sec": e.config.off_hours_cycle_interval_sec,
                    "is_business_hours": e.is_business_hours(),
+                   "exit_check_interval_sec": e.config.exit_check_interval_sec,
                    "max_position_pct": e.config.max_position_pct,
+                   "max_risk_per_trade": e.config.max_risk_per_trade,
+                   "max_net_exposure_pct": e.config.max_net_exposure_pct,
+                   "min_stop_pct": round(e.config.min_stop_pct, 4),
                    "max_trades_per_day": e.config.max_trades_per_day,
                    "max_drawdown_kill": e.config.max_drawdown_kill},
     }
@@ -429,6 +463,27 @@ def _agent_status_snapshot() -> dict:
         summary="Current AI agent status, equity and positions")
 async def get_agent():
     return ok(_agent_status_snapshot())
+
+
+@app.get("/api/agent/trades", tags=["AI Agent"],
+        summary="AI agent closed trades + performance stats (source of truth for PnL)")
+async def get_agent_trades(limit: int = 100, bot_id: Optional[str] = None):
+    """Realized results from the trade ledger — not the decision log, which
+    only says what the LLM intended."""
+    try:
+        from backend.agent.stats import trade_stats
+        from backend.persistence.database import init_db
+        from backend.persistence.repository import TradeRepository
+        init_db()
+        bot = bot_id or (agent_engine.config.bot_id if agent_engine else
+                         os.getenv("AGENT_BOT_ID", "ai_agent_v2"))
+        repo = TradeRepository()
+        closed = repo.get_closed_trades(bot)
+        open_ = repo.get_open_trades(bot)
+        return ok({"bot_id": bot, "stats": trade_stats(closed), "open": open_,
+                   "closed": list(reversed(closed))[:limit]})
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to read agent trades: {exc}")
 
 
 @app.get("/api/agent/decisions", tags=["AI Agent"],

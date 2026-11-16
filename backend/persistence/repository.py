@@ -79,6 +79,8 @@ class TradeRepository:
                 .filter(
                     TradeRecord.status == "closed",
                     TradeRecord.pnl_pct.isnot(None),
+                    # the AI agent shares this table; its trades must not seed the legacy Kelly sizing
+                    ~TradeRecord.bot_id.like("ai_agent%"),
                 )
                 .order_by(TradeRecord.exit_time.desc())
                 .limit(limit)
@@ -108,6 +110,27 @@ class TradeRepository:
         session = get_session()
         try:
             return session.query(TradeRecord).filter(TradeRecord.status == "closed").count()
+        finally:
+            session.close()
+
+    def get_open_trades(self, bot_id: str) -> List[dict]:
+        """Open trades of one bot, as AgentTrade-compatible kwargs (ms epochs)."""
+        return self._query_bot(bot_id, "open")
+
+    def get_closed_trades(self, bot_id: str, since: Optional[datetime] = None) -> List[dict]:
+        """Closed trades of one bot, oldest exit first, as AgentTrade kwargs."""
+        return self._query_bot(bot_id, "closed", since)
+
+    def _query_bot(self, bot_id: str, status: str, since: Optional[datetime] = None) -> List[dict]:
+        session = get_session()
+        try:
+            q = session.query(TradeRecord).filter(TradeRecord.bot_id == bot_id,
+                                                  TradeRecord.status == status)
+            if since is not None:
+                q = q.filter(TradeRecord.exit_time >= since)
+            q = q.order_by(TradeRecord.exit_time.asc() if status == "closed"
+                           else TradeRecord.entry_time.asc())
+            return [_trade_to_kwargs(r) for r in q.all()]
         finally:
             session.close()
 
@@ -353,6 +376,24 @@ class AgentDecisionLogRepository:
 # ══════════════════════════════════════════════════════════════════════════
 # Helper
 # ══════════════════════════════════════════════════════════════════════════
+
+def _dt_to_ms(dt: Optional[datetime]) -> Optional[int]:
+    if dt is None:
+        return None
+    from calendar import timegm
+    return timegm(dt.timetuple()) * 1000 + dt.microsecond // 1000
+
+
+def _trade_to_kwargs(r: TradeRecord) -> dict:
+    return {
+        "id": r.id, "symbol": r.symbol, "direction": r.direction,
+        "entry_time": _dt_to_ms(r.entry_time), "entry_price": r.entry_price,
+        "quantity": r.quantity, "stop_loss": r.stop_loss or 0.0,
+        "take_profit": r.take_profit or 0.0, "exit_time": _dt_to_ms(r.exit_time),
+        "exit_price": r.exit_price, "pnl": r.pnl, "pnl_pct": r.pnl_pct,
+        "status": r.status, "reason": r.reason, "bot_id": r.bot_id,
+    }
+
 
 def _trade_to_dict(r: TradeRecord) -> dict:
     return {

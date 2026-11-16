@@ -14,6 +14,7 @@ os.environ["AUTOSTART_COLLECTOR"] = "0"
 os.environ["AUTOSTART_PORTFOLIO"] = "0"
 os.environ["AUTOSTART_AGENT"] = "0"
 os.environ["AUTOSTART_AGENT_ALERT"] = "0"
+os.environ["AUTOSTART_REGIME_ALERT"] = "0"
 
 
 def _make_ohlcv(n: int = 500, seed: int = 42, trend: float = 0.0001) -> pd.DataFrame:
@@ -109,6 +110,14 @@ def fake_exchange():
             price = self.prices.get(symbol, 100.0)
             return {"last": price, "percentage": 0.0, "high": price, "low": price,
                    "quoteVolume": 1_000_000.0}
+
+        def fetch_tickers(self, symbols):
+            return {s: self.fetch_ticker(s) for s in symbols}
+
+        def fetch_ohlcv(self, symbol, timeframe="15m", limit=34):
+            """Flat-ish bars with a 1% high-low range → ATR ≈ 1% of price."""
+            p = self.prices.get(symbol, 100.0)
+            return [[i * 900_000, p, p * 1.005, p * 0.995, p, 1.0] for i in range(limit)]
 
     return _FakeExchange()
 

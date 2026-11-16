@@ -1,17 +1,22 @@
 """
-AI agent decision loop (Phase 0 — paper trading only).
+AI agent decision loop (paper trading only).
 
 Mirrors the structure of backend/strategy/portfolio_engine.py: a dataclass
 config + state, a `start()` asyncio loop, blocking I/O via asyncio.to_thread,
-and a `_cycle()` that's the one place per-tick logic lives. The crucial
-difference is non-determinism (an LLM decides), so EVERY cycle is logged to
-AgentDecisionLog regardless of outcome (hold / executed / rejected / halted)
-— that log is the only way to audit "why did it do that" after the fact.
+and a `_cycle()` that's the one place per-tick LLM logic lives. EVERY LLM
+cycle is logged to AgentDecisionLog regardless of outcome — that log is the
+only way to audit "why did it do that" after the fact.
 
-Guardrails (backend.agent.guardrails) are checked BEFORE calling the LLM
-(saves cost on a halted/capped day) and the ONE proposed-order path
-(place_paper_order tool) is re-validated again at execution time — the model
-never gets a direct line to PaperBroker.
+Two loops run side by side:
+- the LLM cycle (every few minutes / hours) decides entries and discretionary
+  exits;
+- the exit monitor (every ~30s, no LLM) enforces each position's stop-loss and
+  take-profit, marks to market and checks the drawdown kill-switch, so
+  protection doesn't wait for the next LLM call.
+
+Guardrails (backend.agent.guardrails) are checked BEFORE calling the LLM and
+again on every proposed order — the model never gets a direct line to
+PaperBroker.
 """
 from __future__ import annotations
 
@@ -26,18 +31,31 @@ from zoneinfo import ZoneInfo
 
 from backend.agent import guardrails
 from backend.agent.llm_client import AgentLLMClient
-from backend.agent.paper_execution import PaperBroker
+from backend.agent.market_data import AtrCache, default_bracket
+from backend.agent.paper_execution import ROUND_TRIP_COST, AgentTrade, PaperBroker
 from backend.agent.tools import TOOL_SCHEMAS, build_tool_dispatch
 
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are a cautious crypto paper-trading assistant. Each \
-cycle you may look at recent price action and news, then either place ONE \
-paper order or hold. Only trade symbols you're given tools for. Always call \
-`hold` with a rationale if you see no clear reason to trade — doing nothing \
-is a normal, good outcome. Never invent prices, news, or positions — only \
-use what the tools return. Keep position sizes modest; you do not need to \
-use your full size allowance.
+cycle you may look at recent price action, news and your open positions, then \
+take at most ONE action: open/add a position (place_paper_order), exit one \
+(close_paper_position), or hold. Only trade symbols you're given tools for. \
+Always call `hold` with a rationale if you see no clear reason to act — doing \
+nothing is a normal, good outcome. Never invent prices, news, or positions — \
+only use what the tools return.
+
+Exits: every position has an automatic stop-loss and take-profit, enforced \
+every ~30 seconds without you. You don't need to babysit them. Close a \
+position yourself only when the reason you entered no longer holds. To switch \
+sides on a symbol, close first; an order against an open position is \
+rejected. A same-side order adds to the position.
+
+Risk: each trade risks at most ~1% of equity (position size × stop distance). \
+BTC, ETH and SOL move together, so being long (or short) all three is ONE \
+bet, and the guardrails cap net directional exposure. Prefer one well-founded \
+position over several correlated ones. Every round trip costs ~0.3% in fees \
+and slippage, so a trade needs an expected move clearly larger than that.
 
 Each news item from get_news_digest includes `cycles_since_first_seen`. 0 \
 means genuinely new this cycle. If it's greater than 0, that story is \
@@ -48,35 +66,42 @@ showing the market is still actively reacting, and say so explicitly in \
 the rationale. Simply restating an old headline is not a valid rationale \
 for a new trade.
 
-Cycles run frequently during business hours. This is intentional: short, \
-tactical trades — opened and closed within the same day, including ones \
-that go against the slower multi-day narrative — are an expected and \
-valid use of this cadence, as long as they're grounded in the current \
-price/order-book snapshot, not in stale news or an old multi-day thesis."""
+Cycles run frequently during business hours. Short, tactical trades — \
+opened and closed within the same day, including ones that go against the \
+slower multi-day narrative — are a valid use of this cadence, as long as \
+they're grounded in the current price snapshot, not in stale news."""
 
 
 @dataclass
 class AgentConfig:
     universe: List[str] = field(default_factory=lambda: list(guardrails.SYMBOL_ALLOWLIST))
     total_capital: float = 500.0            # separate dedicated paper book from the $1500 cross-sectional one
-    cycle_interval_sec: int = 3600          # hourly — see plan for rationale (not HFT, caps LLM cost)
-    # Crypto trades 24/7, so the mark-to-market/kill-switch check always runs
-    # every cycle regardless of time — only the LLM-call cadence slows down
-    # outside business hours, as a token-cost lever. Never fully stop: open
-    # positions still need monitoring nights/weekends (thin liquidity is
-    # exactly when crypto makes its sharpest moves).
+    bot_id: str = "ai_agent_v2"             # v1 ledger was unreliable (positions were overwritten), v2 starts clean
+    cycle_interval_sec: int = 3600
+    # Only the LLM cadence slows down outside business hours (token cost);
+    # the exit monitor below runs 24/7 regardless.
     off_hours_cycle_interval_sec: int = 4 * 3600
     business_hours_start: int = 6
     business_hours_end: int = 19
     business_days: tuple = (0, 1, 2, 3, 4)   # Mon=0 .. Fri=4
     timezone: str = "America/Sao_Paulo"
+    exit_check_interval_sec: int = 30
     max_position_pct: float = 0.15
     max_open_positions: int = 3
+    max_risk_per_trade: float = 0.01
+    max_net_exposure_pct: float = 0.30
+    # Stops tighter than 4× the round-trip cost turn fees into >25% of the
+    # risk per trade — the reason the earlier 5m intraday research was NO-GO.
+    min_stop_pct: float = 4 * ROUND_TRIP_COST
+    max_stop_pct: float = 0.08
+    stop_atr_mult: float = 1.5
+    target_atr_mult: float = 2.5
+    atr_timeframe: str = "15m"
+    stop_cooldown_sec: int = 1800
     daily_loss_limit: float = 0.05
     max_drawdown_kill: float = 0.20
     max_trades_per_day: int = 10
     max_llm_calls_per_day: int = 150
-    news_lookback_hours: int = 24
 
 
 @dataclass
@@ -87,6 +112,7 @@ class AgentState:
     llm_calls_today: int = 0
     tokens_today: int = 0
     news_first_seen_cycle: dict = field(default_factory=dict)  # url/title -> cycle first seen
+    last_exit_check: Optional[float] = None
 
 
 class AIAgentEngine:
@@ -98,13 +124,17 @@ class AIAgentEngine:
         self.state = AgentState()
         self.exchange = exchange
         self.llm_client = llm_client
-        self.broker = PaperBroker(exchange, config.total_capital)
+        self.broker = PaperBroker(exchange, config.total_capital, trade_repo=trade_repo,
+                                  bot_id=config.bot_id)
+        self.atr = AtrCache(exchange, timeframe=config.atr_timeframe)
         self.equity_repo = equity_repo
         self.daily_repo = daily_repo
         self.decision_repo = decision_repo
         self.trade_repo = trade_repo
-        self._last_reset_date = datetime.now().date()
+        self._tz = ZoneInfo(config.timezone)
+        self._last_reset_date = datetime.now(self._tz).date()
         self._daily_start_equity = config.total_capital
+        self._exit_task: Optional[asyncio.Task] = None
 
     # ── API-compatible read properties ──────────────────────────────────
     @property
@@ -117,6 +147,31 @@ class AIAgentEngine:
 
     def positions(self) -> List[dict]:
         return self.broker.positions()
+
+    def closed_today(self) -> List[AgentTrade]:
+        start = datetime.now(self._tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        start_ms = int(start.timestamp() * 1000)
+        return [t for t in self.broker.closed_trades if (t.exit_time or 0) >= start_ms]
+
+    # ── restore after restart ───────────────────────────────────────────
+    def restore(self) -> int:
+        """Reload this bot's open positions and realized PnL from the DB.
+        Returns the number of open positions restored. Blocking (DB I/O)."""
+        if not self.trade_repo:
+            return 0
+        try:
+            open_rows = self.trade_repo.get_open_trades(self.config.bot_id)
+            closed_rows = self.trade_repo.get_closed_trades(self.config.bot_id)
+        except Exception as exc:
+            logger.error(f"AI agent restore failed, starting with an empty book: {exc}")
+            return 0
+        self.broker.restore([AgentTrade(**r) for r in open_rows],
+                            [AgentTrade(**r) for r in closed_rows])
+        self._daily_start_equity = (self.config.total_capital + self.broker.realized_pnl()
+                                    - sum(t.pnl or 0.0 for t in self.closed_today()))
+        logger.info(f"🤖 AI agent restored {len(open_rows)} open / {len(closed_rows)} closed trades "
+                    f"(realized ${self.broker.realized_pnl():+.2f})")
+        return len(open_rows)
 
     # ── guardrail orchestration (pure checks, I/O-free) ─────────────────
     def pre_llm_block_reason(self) -> Optional[str]:
@@ -155,16 +210,45 @@ class AIAgentEngine:
         self.state.news_first_seen_cycle = {k: v for k, v in tracker.items() if k in kept_keys}
         return out
 
+    def _prepare_order(self, args: dict) -> dict:
+        """Fill the ATR-based default stop/target when the model omits them.
+        Model-supplied values are left as-is for the guardrails to accept or
+        reject (never silently clamped)."""
+        args = dict(args)
+        if args.get("stop_pct") is None:
+            bracket = default_bracket(self.atr.atr_pct(args.get("symbol")),
+                                      self.config.stop_atr_mult, self.config.target_atr_mult,
+                                      self.config.min_stop_pct, self.config.max_stop_pct)
+            args["stop_pct"] = bracket["stop_pct"]
+            if args.get("target_pct") is None:
+                args["target_pct"] = bracket["target_pct"]
+        elif args.get("target_pct") is None and isinstance(args["stop_pct"], (int, float)):
+            args["target_pct"] = args["stop_pct"] * (self.config.target_atr_mult / self.config.stop_atr_mult)
+        return args
+
+    def _cooldown_remaining(self, symbol: Optional[str]) -> float:
+        last = self.broker.last_stop_at.get(symbol) if symbol else None
+        if last is None:
+            return 0.0
+        return max(0.0, self.config.stop_cooldown_sec - (time.time() - last))
+
     def _order_guardrail_check(self, payload: dict):
+        symbol = payload.get("symbol") if isinstance(payload, dict) else None
         return guardrails.validate_order_request(
             payload, equity=self.broker.equity, open_notional=self.broker.open_notional(),
             max_position_pct=self.config.max_position_pct,
             max_open_positions=self.config.max_open_positions,
+            signed_notional=self.broker.signed_notional(),
+            max_net_exposure_pct=self.config.max_net_exposure_pct,
+            max_risk_pct=self.config.max_risk_per_trade,
+            min_stop_pct=self.config.min_stop_pct,
+            max_stop_pct=self.config.max_stop_pct,
+            cooldown_remaining_sec=self._cooldown_remaining(symbol),
         )
 
-    # ── live loop ────────────────────────────────────────────────────────
+    # ── live loops ───────────────────────────────────────────────────────
     def is_business_hours(self, now: Optional[datetime] = None) -> bool:
-        now = now or datetime.now(ZoneInfo(self.config.timezone))
+        now = now or datetime.now(self._tz)
         return (now.weekday() in self.config.business_days
                 and self.config.business_hours_start <= now.hour < self.config.business_hours_end)
 
@@ -174,16 +258,57 @@ class AIAgentEngine:
 
     async def start(self):
         logger.info(f"🤖 AI agent engine starting (PAPER, {len(self.config.universe)} symbols, "
-                    f"cycle every {self.config.cycle_interval_sec}s business hours / "
-                    f"{self.config.off_hours_cycle_interval_sec}s off-hours)")
+                    f"LLM every {self.config.cycle_interval_sec}s business hours / "
+                    f"{self.config.off_hours_cycle_interval_sec}s off-hours, exits every "
+                    f"{self.config.exit_check_interval_sec}s)")
+        self._exit_task = asyncio.create_task(self._exit_monitor_loop())
         try:
             while not self.state.halted:
-                await self._cycle()
+                try:
+                    await self._cycle()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.exception(f"AI agent cycle failed, continuing: {exc}")
                 await asyncio.sleep(self.current_cycle_interval())
         except asyncio.CancelledError:
             logger.info("AI agent engine cancelled")
-        except Exception as exc:
-            logger.critical(f"💥 AI agent engine error: {exc}")
+        finally:
+            if self._exit_task:
+                self._exit_task.cancel()
+
+    async def _exit_monitor_loop(self):
+        while not self.state.halted:
+            try:
+                await self._exit_check()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(f"AI agent exit monitor error: {exc}")
+            await asyncio.sleep(self.config.exit_check_interval_sec)
+
+    def _exit_check_sync(self) -> List[AgentTrade]:
+        prices = self.broker.fetch_prices(list(self.broker.open_trades.keys()))
+        closed = self.broker.check_exits(prices)
+        self.broker.mark_to_market(prices)
+        return closed
+
+    async def _exit_check(self):
+        """One pass of the no-LLM protection loop."""
+        if self.broker.open_trades:
+            await asyncio.to_thread(self._exit_check_sync)
+        self.state.last_exit_check = time.time()
+        await self._halt_if_drawdown()
+
+    async def _halt_if_drawdown(self) -> bool:
+        if self.state.halted or not guardrails.drawdown_tripped(
+                self.broker.peak_equity, self.broker.equity, self.config.max_drawdown_kill):
+            return False
+        logger.critical(f"🛑 AI agent kill-switch: drawdown ≥ {self.config.max_drawdown_kill:.0%}. Halting.")
+        await asyncio.to_thread(self.broker.close_all, "drawdown_kill_switch")
+        self.state.halted = True
+        self._log_decision(halted_reason="drawdown_kill_switch")
+        return True
 
     async def _cycle(self):
         self._check_daily_reset()
@@ -192,16 +317,7 @@ class AIAgentEngine:
         await asyncio.to_thread(self.broker.mark_to_market)
         self._record_equity()
 
-        # Permanent kill-switch check happens here too (independent of the
-        # pre-LLM block reason, which is informational for the log) — halts
-        # the loop itself, not just this cycle, and flattens all positions.
-        if guardrails.drawdown_tripped(self.broker.peak_equity, self.broker.equity,
-                                       self.config.max_drawdown_kill):
-            logger.critical(f"🛑 AI agent kill-switch: drawdown ≥ {self.config.max_drawdown_kill:.0%}. Halting.")
-            closed = await asyncio.to_thread(self.broker.close_all, "drawdown_kill_switch")
-            self._persist_closed_trades(closed)
-            self.state.halted = True
-            self._log_decision(halted_reason="drawdown_kill_switch")
+        if await self._halt_if_drawdown():
             return
 
         block_reason = self.pre_llm_block_reason()
@@ -212,15 +328,16 @@ class AIAgentEngine:
         await self._run_llm_turn()
 
     async def _run_llm_turn(self):
-        guardrail_check = self._order_guardrail_check
         dispatch = build_tool_dispatch(self.config.universe, self.exchange, self.broker,
-                                       guardrail_check, news_tracker=self._annotate_news)
+                                       self._order_guardrail_check,
+                                       news_tracker=self._annotate_news,
+                                       order_preparer=self._prepare_order)
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": (
                 f"Cycle #{self.state.cycle_count}. Tradeable symbols: {self.config.universe}. "
-                f"Decide whether to place one paper order or hold. Use the tools to "
-                f"check prices, news and your current positions before deciding.")},
+                f"Equity ${self.broker.equity:.2f}. Check prices, news and your current "
+                f"positions (with their stops/targets) before deciding: open/add, close, or hold.")},
         ]
         result = await asyncio.to_thread(
             self.llm_client.chat_with_tools, messages, TOOL_SCHEMAS, dispatch)
@@ -228,11 +345,10 @@ class AIAgentEngine:
         self.state.llm_calls_today += 1
         self.state.tokens_today += result.prompt_tokens + result.completion_tokens
 
-        executed, rejections = [], []
+        rejections = []
         for call in result.tool_trace:
-            if call["name"] == "place_paper_order":
+            if call["name"] in ("place_paper_order", "close_paper_position"):
                 if call["output"].get("executed"):
-                    executed.append(call)
                     self.state.trades_today += 1
                 elif call["output"].get("rejected_reason"):
                     rejections.append(call)
@@ -254,6 +370,8 @@ class AIAgentEngine:
                 pass
 
     def _persist_closed_trades(self, trades):
+        """Trades are persisted by the broker on every change; kept so callers
+        that close positions outside the broker's normal path stay idempotent."""
         if not self.trade_repo:
             return
         for trade in trades:
@@ -263,12 +381,15 @@ class AIAgentEngine:
                 logger.error(f"Failed to persist agent trade {trade.id}: {exc}")
 
     def _check_daily_reset(self):
-        today = datetime.now().date()
+        today = datetime.now(self._tz).date()
         if today != self._last_reset_date:
             if self.daily_repo:
-                closed_today = [t for t in self.broker.closed_trades]
-                wins = sum(1 for t in closed_today if (t.pnl or 0) > 0)
-                losses = sum(1 for t in closed_today if (t.pnl or 0) <= 0)
+                day_start = datetime.combine(self._last_reset_date, datetime.min.time(), self._tz)
+                day_end = datetime.combine(today, datetime.min.time(), self._tz)
+                lo, hi = int(day_start.timestamp() * 1000), int(day_end.timestamp() * 1000)
+                closed = [t for t in self.broker.closed_trades if lo <= (t.exit_time or 0) < hi]
+                wins = sum(1 for t in closed if (t.pnl or 0) > 0)
+                losses = sum(1 for t in closed if (t.pnl or 0) <= 0)
                 try:
                     self.daily_repo.save(self._last_reset_date.isoformat(), self.daily_pnl,
                                          self.state.trades_today, wins, losses,
@@ -311,6 +432,6 @@ class AIAgentEngine:
         if not tool_trace:
             return None
         for call in reversed(tool_trace):
-            if call["name"] in ("place_paper_order", "hold"):
+            if call["name"] in ("place_paper_order", "close_paper_position", "hold"):
                 return call.get("args", {}).get("rationale")
         return None

@@ -135,3 +135,62 @@ class TestKillSwitches:
     def test_llm_call_budget(self):
         assert llm_call_budget_exceeded(149, cap=150) is False
         assert llm_call_budget_exceeded(150, cap=150) is True
+
+
+class TestV2OrderChecks:
+    """Checks enabled by the engine since the v2 book (all optional kwargs)."""
+
+    @staticmethod
+    def _check(payload, signed=None, **kw):
+        signed = signed or {}
+        base = {"symbol": "BTC/USDT", "side": "buy", "notional_usd": 50.0}
+        base.update(payload)
+        return validate_order_request(
+            base, equity=1000.0, open_notional={s: abs(v) for s, v in signed.items()},
+            max_position_pct=0.15, max_open_positions=3, signed_notional=signed, **kw)
+
+    def test_opposite_side_on_open_symbol_rejected(self):
+        ok, reason = self._check({"side": "sell"}, signed={"BTC/USDT": 50.0})
+        assert not ok and "close_paper_position" in reason
+
+    def test_same_side_add_allowed_within_cumulative_cap(self):
+        ok, _ = self._check({"notional_usd": 50.0}, signed={"BTC/USDT": 50.0})
+        assert ok
+
+    def test_cumulative_position_cap(self):
+        ok, reason = self._check({"notional_usd": 120.0}, signed={"BTC/USDT": 50.0})
+        assert not ok and "max_position_pct" in reason
+
+    def test_stop_tighter_than_minimum_rejected(self):
+        ok, reason = self._check({"stop_pct": 0.005}, min_stop_pct=0.012)
+        assert not ok and "minimum" in reason
+
+    def test_stop_wider_than_maximum_rejected(self):
+        ok, reason = self._check({"stop_pct": 0.2}, max_stop_pct=0.08)
+        assert not ok and "maximum" in reason
+
+    def test_target_below_stop_rejected(self):
+        ok, reason = self._check({"stop_pct": 0.02, "target_pct": 0.01})
+        assert not ok and "target_pct" in reason
+
+    def test_risk_cap(self):
+        # $150 × 8% stop = $12 risk > 1% of $1000
+        ok, reason = self._check({"notional_usd": 150.0, "stop_pct": 0.08}, max_risk_pct=0.01)
+        assert not ok and "max_risk_pct" in reason
+        ok, _ = self._check({"notional_usd": 150.0, "stop_pct": 0.02}, max_risk_pct=0.01)
+        assert ok
+
+    def test_net_exposure_cap_blocks_third_same_side_position(self):
+        signed = {"ETH/USDT": 140.0, "SOL/USDT": 140.0}
+        ok, reason = self._check({"notional_usd": 100.0}, signed=signed, max_net_exposure_pct=0.30)
+        assert not ok and "net directional exposure" in reason
+
+    def test_net_exposure_allows_hedging_side(self):
+        signed = {"ETH/USDT": 140.0, "SOL/USDT": 140.0}
+        ok, _ = self._check({"side": "sell", "notional_usd": 100.0}, signed=signed,
+                            max_net_exposure_pct=0.30)
+        assert ok
+
+    def test_cooldown_after_stop(self):
+        ok, reason = self._check({}, cooldown_remaining_sec=600)
+        assert not ok and "cooldown" in reason

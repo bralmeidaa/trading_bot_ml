@@ -11,6 +11,7 @@ import logging
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.pool import StaticPool
 
 from .models import Base
 
@@ -21,11 +22,16 @@ DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./trading_bot.db")
 # SQLite needs check_same_thread=False for async-adjacent usage
 _connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 
+# An in-memory SQLite DB exists per connection; share one connection across
+# threads so worker threads (asyncio.to_thread, the test client) see the same DB.
+_pool_args = {"poolclass": StaticPool} if ":memory:" in DATABASE_URL else {}
+
 engine = create_engine(
     DATABASE_URL,
     connect_args=_connect_args,
     pool_pre_ping=True,        # recycle stale connections
     echo=False,                # set True to log every SQL statement
+    **_pool_args,
 )
 
 # Enable WAL mode for SQLite — much better concurrent read performance
