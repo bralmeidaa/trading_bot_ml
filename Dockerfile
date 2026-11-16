@@ -58,7 +58,7 @@ COPY --from=builder /app /app
 # Cria o usuário não-root. Cria orderbook_data ANTES do chown para o named
 # volume montado ali herdar a posse de tradingbot (evita erro de escrita).
 RUN useradd -m -u 1000 tradingbot \
-    && mkdir -p /app/orderbook_data \
+    && mkdir -p /app/orderbook_data /app/liquidations_data \
     && chown -R tradingbot:tradingbot /app
 USER tradingbot
 

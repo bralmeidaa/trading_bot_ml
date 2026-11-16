@@ -161,7 +161,7 @@ stages:
                 set -e
 
                 echo "📁 Ensuring persistent host data dirs (outside deploy dir, owned by container uid 1000)..."
-                sudo mkdir -p /opt/trading-bot-data/orderbook_data /opt/trading-bot-data/db
+                sudo mkdir -p /opt/trading-bot-data/orderbook_data /opt/trading-bot-data/db /opt/trading-bot-data/liquidations_data
                 sudo chown -R 1000:1000 /opt/trading-bot-data
 
                 echo "🔄 Pulling latest image..."
@@ -210,6 +210,7 @@ stages:
                   # Explicit call is belt-and-suspenders (idempotent) — the AGENT is
                   # the active paper strategy now, not the cross-sectional portfolio.
                   curl -fsS -X POST https://trading.bratech.me/api/collector/start || true
+                  curl -fsS -X POST https://trading.bratech.me/api/stream/start || true
                   curl -fsS -X POST https://trading.bratech.me/api/agent/start || true
                 else
                   echo "❌ Dashboard is not accessible (HTTP $response)"

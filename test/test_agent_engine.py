@@ -322,7 +322,7 @@ class TestResilience:
                               off_hours_cycle_interval_sec=0, exit_check_interval_sec=0)
         calls = {"n": 0}
 
-        async def flaky_cycle():
+        async def flaky_cycle(*_):
             calls["n"] += 1
             if calls["n"] == 1:
                 raise RuntimeError("boom")

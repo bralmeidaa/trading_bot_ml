@@ -27,7 +27,11 @@ services:
       - AZURE_AI_FOUNDRY_DEPLOYMENT=${AZURE_AI_FOUNDRY_DEPLOYMENT:-gpt-5-mini}
       - AZURE_AI_FOUNDRY_API_VERSION=${AZURE_AI_FOUNDRY_API_VERSION:-2024-10-21}
       - AGENT_TOTAL_CAPITAL=${AGENT_TOTAL_CAPITAL:-500.0}
-      - AGENT_CYCLE_INTERVAL_SEC=${AGENT_CYCLE_INTERVAL_SEC:-600}
+      # With the stream on, market events wake the agent early, so the clock
+      # is only a heartbeat (30 min business hours / 4 h off-hours).
+      - AUTOSTART_STREAM=${AUTOSTART_STREAM:-1}
+      - LIQUIDATIONS_DIR=/app/liquidations_data
+      - AGENT_CYCLE_INTERVAL_SEC=${AGENT_CYCLE_INTERVAL_SEC:-1800}
       # Outside business hours, LLM decision cycles slow down (token-cost
       # lever) but the engine itself keeps running — mark-to-market and the
       # drawdown kill-switch still check every cycle, since crypto trades
@@ -75,6 +79,8 @@ services:
       # Host dir is chowned to uid:gid 1000:1000 (= tradingbot in the container;
       # note the host `ubuntu` user is 1001, NOT 1000) so the collector can write.
       - /opt/trading-bot-data/orderbook_data:/app/orderbook_data
+      # Liquidation history recorded from the Binance futures stream.
+      - /opt/trading-bot-data/liquidations_data:/app/liquidations_data
       # Paper-trading SQLite DB (+ its -wal/-shm) on the same persistent mount.
       - /opt/trading-bot-data/db:/app/data
     restart: unless-stopped

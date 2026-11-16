@@ -7,12 +7,16 @@ and a `_cycle()` that's the one place per-tick LLM logic lives. EVERY LLM
 cycle is logged to AgentDecisionLog regardless of outcome — that log is the
 only way to audit "why did it do that" after the fact.
 
-Two loops run side by side:
-- the LLM cycle (every few minutes / hours) decides entries and discretionary
-  exits;
+Three loops run side by side:
+- the LLM cycle decides entries and discretionary exits. It runs on a
+  heartbeat (cycle_interval_sec) and is woken earlier by market events;
 - the exit monitor (every ~30s, no LLM) enforces each position's stop-loss and
   take-profit, marks to market and checks the drawdown kill-switch, so
-  protection doesn't wait for the next LLM call.
+  protection doesn't wait for the next LLM call;
+- the event loop (when a BinanceStream is attached) watches for sharp price
+  moves, liquidation bursts, fresh headlines and positions nearing their stop,
+  and wakes the LLM cycle — debounced per event and rate-limited by
+  min_llm_gap_sec and the daily LLM budget.
 
 Guardrails (backend.agent.guardrails) are checked BEFORE calling the LLM and
 again on every proposed order — the model never gets a direct line to
@@ -32,8 +36,10 @@ from zoneinfo import ZoneInfo
 from backend.agent import guardrails
 from backend.agent.llm_client import AgentLLMClient
 from backend.agent.market_data import AtrCache, default_bracket
+from backend.agent.news_sources import digest_for_symbols
 from backend.agent.paper_execution import ROUND_TRIP_COST, AgentTrade, PaperBroker
 from backend.agent.tools import TOOL_SCHEMAS, build_tool_dispatch
+from backend.stream import events as ev
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +108,18 @@ class AgentConfig:
     max_drawdown_kill: float = 0.20
     max_trades_per_day: int = 10
     max_llm_calls_per_day: int = 150
+    max_tool_turns: int = 6
+    # event-driven wake-ups (only active with a stream attached)
+    event_check_interval_sec: int = 5
+    min_llm_gap_sec: int = 120
+    event_cooldown_sec: int = 900
+    move_window_min: int = 5
+    move_atr_mult: float = 1.5
+    liq_bucket_sec: int = 300
+    liq_burst_mult: float = 3.0
+    liq_min_usd: float = 250_000.0
+    near_stop_r: float = 0.3
+    news_poll_sec: int = 180
 
 
 @dataclass
@@ -119,8 +137,18 @@ class AIAgentEngine:
     """Paper-trading engine. API-compatible read attributes exposed."""
 
     def __init__(self, config: AgentConfig, exchange, llm_client: AgentLLMClient,
-                equity_repo=None, daily_repo=None, decision_repo=None, trade_repo=None):
+                equity_repo=None, daily_repo=None, decision_repo=None, trade_repo=None,
+                stream=None):
         self.config = config
+        self.stream = stream
+        self._wake: Optional[asyncio.Queue] = None
+        self._event_last_fired: dict = {}
+        self._news_seen: Optional[set] = None
+        self._news_last_poll = 0.0
+        self._last_llm_at = 0.0
+        self._event_task: Optional[asyncio.Task] = None
+        self._wake_reasons: List[str] = []
+        self.events_fired = 0
         self.state = AgentState()
         self.exchange = exchange
         self.llm_client = llm_client
@@ -258,24 +286,97 @@ class AIAgentEngine:
 
     async def start(self):
         logger.info(f"🤖 AI agent engine starting (PAPER, {len(self.config.universe)} symbols, "
-                    f"LLM every {self.config.cycle_interval_sec}s business hours / "
+                    f"LLM heartbeat {self.config.cycle_interval_sec}s business hours / "
                     f"{self.config.off_hours_cycle_interval_sec}s off-hours, exits every "
-                    f"{self.config.exit_check_interval_sec}s)")
+                    f"{self.config.exit_check_interval_sec}s, events "
+                    f"{'on' if self.stream else 'off'})")
+        self._wake = asyncio.Queue()
         self._exit_task = asyncio.create_task(self._exit_monitor_loop())
+        if self.stream:
+            self._event_task = asyncio.create_task(self._event_loop())
+        reasons: List[ev.WakeEvent] = []
         try:
             while not self.state.halted:
                 try:
-                    await self._cycle()
+                    await self._cycle(reasons)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
                     logger.exception(f"AI agent cycle failed, continuing: {exc}")
-                await asyncio.sleep(self.current_cycle_interval())
+                reasons = await self._wait_for_wake(self.current_cycle_interval())
         except asyncio.CancelledError:
             logger.info("AI agent engine cancelled")
         finally:
-            if self._exit_task:
-                self._exit_task.cancel()
+            for task in (self._exit_task, self._event_task):
+                if task:
+                    task.cancel()
+
+    async def _wait_for_wake(self, timeout: float) -> List[ev.WakeEvent]:
+        """Block until the heartbeat timeout or an event. Events respect
+        min_llm_gap_sec; everything queued by then is handled in one cycle."""
+        try:
+            first = await asyncio.wait_for(self._wake.get(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return []
+        gap = self.config.min_llm_gap_sec - (time.time() - self._last_llm_at)
+        if gap > 0:
+            await asyncio.sleep(gap)
+        reasons = [first]
+        while not self._wake.empty():
+            reasons.append(self._wake.get_nowait())
+        return reasons
+
+    def _debounced(self, event: ev.WakeEvent, now: float) -> bool:
+        last = self._event_last_fired.get(event.key)
+        if last is not None and now - last < self.config.event_cooldown_sec:
+            return True
+        self._event_last_fired[event.key] = now
+        return False
+
+    def _detect_events(self) -> List[ev.WakeEvent]:
+        """Blocking (ATR and news may hit REST): evaluate every detector."""
+        c, s = self.config, self.stream
+        found: List[ev.WakeEvent] = []
+        for sym in c.universe:
+            last = s.price(sym, max_age_sec=60)
+            move = ev.price_move(sym, s.closes(sym), last, self.atr.atr_pct(sym),
+                                 c.move_window_min, c.move_atr_mult)
+            if move:
+                found.append(move)
+            burst = ev.liquidation_burst(sym, s.liquidation_buckets(sym, c.liq_bucket_sec, 25),
+                                         c.liq_burst_mult, c.liq_min_usd)
+            if burst:
+                found.append(burst)
+        for trade in list(self.broker.open_trades.values()):
+            near = ev.near_stop(trade.symbol, trade.direction, trade.entry_price, trade.stop_loss,
+                                s.price(trade.symbol, max_age_sec=60), c.near_stop_r)
+            if near:
+                found.append(near)
+        now = time.time()
+        if now - self._news_last_poll >= c.news_poll_sec:
+            self._news_last_poll = now
+            items = digest_for_symbols(c.universe)
+            if self._news_seen is None:      # first poll only seeds: old headlines aren't events
+                self._news_seen = {i.get("url") or i.get("title") for i in items}
+            else:
+                found.extend(ev.fresh_news(items, self._news_seen))
+        return found
+
+    async def _event_loop(self):
+        while not self.state.halted:
+            try:
+                found = await asyncio.to_thread(self._detect_events)
+                now = time.time()
+                for event in found:
+                    if not self._debounced(event, now):
+                        self.events_fired += 1
+                        logger.info(f"⚡ AI agent wake event: {event.detail}")
+                        self._wake.put_nowait(event)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(f"AI agent event loop error: {exc}")
+            await asyncio.sleep(self.config.event_check_interval_sec)
 
     async def _exit_monitor_loop(self):
         while not self.state.halted:
@@ -288,7 +389,11 @@ class AIAgentEngine:
             await asyncio.sleep(self.config.exit_check_interval_sec)
 
     def _exit_check_sync(self) -> List[AgentTrade]:
-        prices = self.broker.fetch_prices(list(self.broker.open_trades.keys()))
+        symbols = list(self.broker.open_trades.keys())
+        prices = self.stream.prices(symbols, max_age_sec=60) if self.stream else {}
+        missing = [s for s in symbols if s not in prices]
+        if missing:     # stream down or stale → REST fallback
+            prices.update(self.broker.fetch_prices(missing))
         closed = self.broker.check_exits(prices)
         self.broker.mark_to_market(prices)
         return closed
@@ -310,9 +415,10 @@ class AIAgentEngine:
         self._log_decision(halted_reason="drawdown_kill_switch")
         return True
 
-    async def _cycle(self):
+    async def _cycle(self, wake_reasons: Optional[List[ev.WakeEvent]] = None):
         self._check_daily_reset()
         self.state.cycle_count += 1
+        self._wake_reasons = [e.detail for e in (wake_reasons or [])]
 
         await asyncio.to_thread(self.broker.mark_to_market)
         self._record_equity()
@@ -332,15 +438,25 @@ class AIAgentEngine:
                                        self._order_guardrail_check,
                                        news_tracker=self._annotate_news,
                                        order_preparer=self._prepare_order)
+        if self._wake_reasons:
+            trigger = ("You were woken early by market events: "
+                       + "; ".join(self._wake_reasons)
+                       + ". Check whether they matter for a trade or an open position. "
+                         "Reacting is optional — an event alone is not a reason to trade.")
+        else:
+            trigger = "Scheduled check (no market event)."
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": (
-                f"Cycle #{self.state.cycle_count}. Tradeable symbols: {self.config.universe}. "
-                f"Equity ${self.broker.equity:.2f}. Check prices, news and your current "
-                f"positions (with their stops/targets) before deciding: open/add, close, or hold.")},
+                f"Cycle #{self.state.cycle_count}. {trigger} Tradeable symbols: "
+                f"{self.config.universe}. Equity ${self.broker.equity:.2f}. Check prices, news "
+                f"and your current positions (with their stops/targets) before deciding: "
+                f"open/add, close, or hold.")},
         ]
+        self._last_llm_at = time.time()
         result = await asyncio.to_thread(
-            self.llm_client.chat_with_tools, messages, TOOL_SCHEMAS, dispatch)
+            self.llm_client.chat_with_tools, messages, TOOL_SCHEMAS, dispatch,
+            max_tool_turns=self.config.max_tool_turns)
 
         self.state.llm_calls_today += 1
         self.state.tokens_today += result.prompt_tokens + result.completion_tokens
@@ -413,7 +529,8 @@ class AIAgentEngine:
                 timestamp=datetime.utcnow(), cycle_id=self.state.cycle_count,
                 symbols_considered=json.dumps(self.config.universe),
                 context_snapshot=json.dumps({"equity": self.broker.equity,
-                                             "positions": self.broker.positions()}),
+                                             "positions": self.broker.positions(),
+                                             "wake_reasons": self._wake_reasons}),
                 raw_llm_output=raw_llm_output,
                 tool_calls_requested=json.dumps(tool_trace or [], default=str),
                 tool_calls_executed=json.dumps([t for t in (tool_trace or [])

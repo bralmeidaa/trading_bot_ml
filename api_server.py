@@ -329,6 +329,39 @@ async def get_portfolio():
 agent_engine = None          # type: ignore
 agent_task: Optional[asyncio.Task] = None
 
+# ── Binance WebSocket stream (prices + liquidations) ────────────────────────
+stream_service = None        # type: ignore
+stream_task: Optional[asyncio.Task] = None
+
+
+def _launch_stream() -> str:
+    """Idempotent. The universe is the agent's allow-list."""
+    global stream_service, stream_task
+    if stream_task and not stream_task.done():
+        return "stream already running"
+    from backend.agent.guardrails import SYMBOL_ALLOWLIST
+    from backend.stream.binance_stream import BinanceStream
+    stream_service = BinanceStream(SYMBOL_ALLOWLIST,
+                                   liquidations_dir=os.getenv("LIQUIDATIONS_DIR") or None)
+    stream_task = asyncio.create_task(stream_service.start())
+    return "Binance stream started"
+
+
+@app.post("/api/stream/start", tags=["Stream"], summary="Start the Binance WebSocket stream")
+async def start_stream():
+    msg = _launch_stream()
+    if agent_engine and agent_engine.stream is None and agent_task and not agent_task.done():
+        msg += " (restart the agent to enable event wake-ups)"
+    return ok({"message": msg})
+
+
+@app.get("/api/stream", tags=["Stream"], summary="Stream health: connections, data age, liquidations")
+async def get_stream():
+    running = stream_task is not None and not stream_task.done()
+    if not stream_service:
+        return ok({"running": False})
+    return ok({**stream_service.status(), "running": running})
+
 
 @app.post("/api/agent/start", tags=["AI Agent"],
          summary="Start the AI trading agent (Azure AI Foundry, paper)")
@@ -375,9 +408,11 @@ async def start_agent():
         )
         exchange = await asyncio.to_thread(lambda: ccxt.binance({"enableRateLimit": True}))
         llm_client = AgentLLMClient(llm_cfg)
+        stream = stream_service if (stream_task and not stream_task.done()) else None
         agent_engine = AIAgentEngine(cfg, exchange=exchange, llm_client=llm_client,
                                      equity_repo=eq_repo, daily_repo=daily_repo,
-                                     decision_repo=decision_repo, trade_repo=trade_repo)
+                                     decision_repo=decision_repo, trade_repo=trade_repo,
+                                     stream=stream)
         restored = await asyncio.to_thread(agent_engine.restore)
         agent_task = asyncio.create_task(agent_engine.start())
         return ok({"message": "AI agent started (paper)", "universe": cfg.universe,
@@ -407,12 +442,15 @@ async def stop_agent():
 async def _shutdown_agent():
     """Redeploys send SIGTERM: stop the loops cleanly. Open positions are
     already in the DB (persisted on every change) and come back via restore()."""
-    if agent_task and not agent_task.done():
-        agent_task.cancel()
-        try:
-            await asyncio.wait_for(agent_task, timeout=5)
-        except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
-            pass
+    if stream_service:
+        stream_service.halted = True
+    for task in (agent_task, stream_task):
+        if task and not task.done():
+            task.cancel()
+            try:
+                await asyncio.wait_for(task, timeout=5)
+            except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+                pass
 
 
 def _agent_status_snapshot() -> dict:
@@ -445,6 +483,8 @@ def _agent_status_snapshot() -> dict:
         "llm_calls_today": e.state.llm_calls_today,
         "last_exit_check": (datetime.utcfromtimestamp(e.state.last_exit_check).isoformat()
                             if e.state.last_exit_check else None),
+        "events_enabled": e.stream is not None,
+        "events_fired": e.events_fired,
         "positions": e.positions(),
         "config": {"universe": e.config.universe, "cycle_interval_sec": e.config.cycle_interval_sec,
                    "off_hours_cycle_interval_sec": e.config.off_hours_cycle_interval_sec,
@@ -673,6 +713,12 @@ async def _autostart():
             logger.info(f"autostart: {msg}")
         except Exception as exc:
             logger.warning(f"autostart collector failed: {exc}")
+    if os.getenv("AUTOSTART_STREAM", "1") != "0":    # before the agent, so it attaches to the stream
+        try:
+            msg = _launch_stream()
+            logger.info(f"autostart: {msg}")
+        except Exception as exc:
+            logger.warning(f"autostart stream failed: {exc}")
     if os.getenv("AUTOSTART_PORTFOLIO", "0") != "0":
         try:
             await start_portfolio()
