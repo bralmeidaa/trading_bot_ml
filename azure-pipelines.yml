@@ -76,15 +76,29 @@ stages:
     - task: Bash@3
       name: check
       displayName: 'Compare commit with the deployed one'
+      env:
+        SYSTEM_ACCESSTOKEN: $(System.AccessToken)
       inputs:
         targetType: 'inline'
         script: |
+          # The push trigger and the schedule can both start a run for the same
+          # commit. Waiting for the earlier one would deadlock (one agent on
+          # this VM), so a later run of a commit that is already being
+          # deployed just skips. Manual runs always deploy.
+          api="$(System.CollectionUri)$(System.TeamProject)/_apis/build/builds?definitions=$(System.DefinitionId)&statusFilter=inProgress,notStarted&api-version=7.1"
+          earlier=$(curl -s -u ":$SYSTEM_ACCESSTOKEN" "$api" | python3 -c "
+          import json, sys
+          runs = json.load(sys.stdin).get('value', [])
+          print(sum(1 for r in runs if r['id'] < $(Build.BuildId) and r['sourceVersion'] == '$(Build.SourceVersion)'))
+          " 2>/dev/null || echo 0)
           deployed=$(cat /opt/trading-bot-data/deployed_sha 2>/dev/null || true)
           skip=false
-          # manual runs always deploy (explicit intent); push/schedule runs skip a commit already live
-          if [ "$deployed" = "$(Build.SourceVersion)" ] && [ "$(Build.Reason)" != "Manual" ]; then
+          if [ "$(Build.Reason)" != "Manual" ] && [ "$deployed" = "$(Build.SourceVersion)" ]; then
             skip=true
             echo "⏭️  $(Build.SourceVersion) is already deployed — skipping build and deploy"
+          elif [ "$(Build.Reason)" != "Manual" ] && [ "$earlier" != "0" ]; then
+            skip=true
+            echo "⏭️  an earlier run of $(Build.SourceVersion) is already in progress — skipping"
           else
             echo "▶️  deployed=${deployed:-none} building=$(Build.SourceVersion) reason=$(Build.Reason)"
           fi
