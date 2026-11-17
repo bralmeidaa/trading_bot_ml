@@ -335,16 +335,100 @@ stream_task: Optional[asyncio.Task] = None
 
 
 def _launch_stream() -> str:
-    """Idempotent. The universe is the agent's allow-list."""
+    """Idempotent. Covers the agent's symbols and the hunters' universe."""
     global stream_service, stream_task
     if stream_task and not stream_task.done():
         return "stream already running"
     from backend.agent.guardrails import SYMBOL_ALLOWLIST
+    from backend.hunters.engine import HUNTER_UNIVERSE
     from backend.stream.binance_stream import BinanceStream
-    stream_service = BinanceStream(SYMBOL_ALLOWLIST,
-                                   liquidations_dir=os.getenv("LIQUIDATIONS_DIR") or None)
+    symbols = list(dict.fromkeys(SYMBOL_ALLOWLIST + HUNTER_UNIVERSE))
+    stream_service = BinanceStream(symbols, liquidations_dir=os.getenv("LIQUIDATIONS_DIR") or None)
     stream_task = asyncio.create_task(stream_service.start())
     return "Binance stream started"
+
+
+# ── Hunters + LLM judge (own paper book) ────────────────────────────────────
+hunter_engine = None         # type: ignore
+hunter_task: Optional[asyncio.Task] = None
+
+
+@app.post("/api/hunters/start", tags=["Hunters"], summary="Start the hunters + LLM judge engine")
+async def start_hunters():
+    global hunter_engine, hunter_task
+    if hunter_task and not hunter_task.done():
+        raise HTTPException(400, "hunter engine already running")
+    from backend.agent.llm_client import AgentLLMClient, config_from_env
+    llm_cfg = config_from_env()
+    if llm_cfg is None:
+        raise HTTPException(400, "Azure AI Foundry not configured — the judge needs it")
+    try:
+        import ccxt
+        from backend.hunters.engine import HunterConfig, HunterEngine
+        from backend.persistence.database import init_db
+        from backend.persistence.repository import ShadowTradeRepository, TradeRepository
+        init_db()
+        cfg = HunterConfig(
+            total_capital=float(os.getenv("HUNTER_TOTAL_CAPITAL", "500.0")),
+            bot_id=os.getenv("HUNTER_BOT_ID", "hunter_judge_v1"),
+            max_llm_calls_per_day=int(os.getenv("HUNTER_MAX_LLM_CALLS_PER_DAY", "60")),
+        )
+        exchange = await asyncio.to_thread(lambda: ccxt.binance({"enableRateLimit": True}))
+        stream = stream_service if (stream_task and not stream_task.done()) else None
+        hunter_engine = HunterEngine(cfg, exchange, AgentLLMClient(llm_cfg),
+                                     trade_repo=TradeRepository(),
+                                     shadow_repo=ShadowTradeRepository(), stream=stream)
+        restored = await asyncio.to_thread(hunter_engine.restore)
+        hunter_task = asyncio.create_task(hunter_engine.start())
+        return ok({"message": "hunter engine started (paper)", "book": cfg.bot_id,
+                   "restored_open_positions": restored,
+                   "hunters": [h.name for h in hunter_engine.hunters]})
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to start hunter engine: {exc}")
+
+
+@app.post("/api/hunters/stop", tags=["Hunters"], summary="Stop the hunter engine (positions stay open in the DB)")
+async def stop_hunters():
+    if not hunter_task or hunter_task.done():
+        raise HTTPException(400, "hunter engine not running")
+    hunter_task.cancel()
+    return ok({"message": "hunter engine stopped; open positions resume on next start"})
+
+
+@app.get("/api/hunters", tags=["Hunters"],
+         summary="Hunter book status, per-hunter shadow results and the judge's value-add")
+async def get_hunters():
+    try:
+        from backend.agent.stats import trade_stats
+        from backend.hunters.shadow import shadow_stats
+        from backend.persistence.database import init_db
+        from backend.persistence.repository import ShadowTradeRepository, TradeRepository
+        init_db()
+        bot = hunter_engine.config.bot_id if hunter_engine else os.getenv("HUNTER_BOT_ID", "hunter_judge_v1")
+        running = hunter_task is not None and not hunter_task.done()
+        shadow_repo = ShadowTradeRepository()
+        return ok({
+            "running": running,
+            "status": hunter_engine.status() if hunter_engine else None,
+            "book": trade_stats(TradeRepository().get_closed_trades(bot)),
+            "shadow": shadow_stats(shadow_repo.get_closed()),
+            "shadow_open": len(shadow_repo.get_open()),
+        })
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to read hunters: {exc}")
+
+
+@app.get("/api/hunters/shadow", tags=["Hunters"], summary="Recent shadow-ledger rows (every candidate)")
+async def get_hunters_shadow(limit: int = 100):
+    from backend.persistence.database import init_db
+    from backend.persistence.repository import ShadowTradeRepository
+    init_db()
+    repo = ShadowTradeRepository()
+    rows = repo.get_open() + repo.get_closed()
+    rows.sort(key=lambda r: r["created_at"] or 0, reverse=True)
+    return ok({"rows": rows[:limit]})
 
 
 @app.post("/api/stream/start", tags=["Stream"], summary="Start the Binance WebSocket stream")
@@ -444,7 +528,7 @@ async def _shutdown_agent():
     already in the DB (persisted on every change) and come back via restore()."""
     if stream_service:
         stream_service.halted = True
-    for task in (agent_task, stream_task):
+    for task in (agent_task, hunter_task, stream_task):
         if task and not task.done():
             task.cancel()
             try:
@@ -731,6 +815,12 @@ async def _autostart():
             logger.info("autostart: AI agent started")
         except Exception as exc:
             logger.warning(f"autostart AI agent failed: {exc}")   # e.g. Azure creds missing — never blocks API boot
+    if os.getenv("AUTOSTART_HUNTERS", "1") != "0":
+        try:
+            await start_hunters()
+            logger.info("autostart: hunter engine started")
+        except Exception as exc:
+            logger.warning(f"autostart hunter engine failed: {exc}")
     if os.getenv("AUTOSTART_AGENT_ALERT", "1") != "0":
         try:
             agent_alert_task = asyncio.create_task(_agent_alert_loop())

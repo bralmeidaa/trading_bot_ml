@@ -30,6 +30,12 @@ services:
       # With the stream on, market events wake the agent early, so the clock
       # is only a heartbeat (30 min business hours / 4 h off-hours).
       - AUTOSTART_STREAM=${AUTOSTART_STREAM:-1}
+      # Hunters (rule-based setups) + LLM judge on their own $500 paper book,
+      # compared against the free-form agent above. Every candidate goes to
+      # the shadow ledger (GET /api/hunters) whatever the judge decided.
+      - AUTOSTART_HUNTERS=${AUTOSTART_HUNTERS:-1}
+      - HUNTER_TOTAL_CAPITAL=${HUNTER_TOTAL_CAPITAL:-500.0}
+      - HUNTER_MAX_LLM_CALLS_PER_DAY=${HUNTER_MAX_LLM_CALLS_PER_DAY:-60}
       - LIQUIDATIONS_DIR=/app/liquidations_data
       - AGENT_CYCLE_INTERVAL_SEC=${AGENT_CYCLE_INTERVAL_SEC:-1800}
       # Outside business hours, LLM decision cycles slow down (token-cost

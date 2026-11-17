@@ -134,14 +134,17 @@ class BinanceStream:
         return [b["c"] for b in self.klines.get(symbol, ())]
 
     def liquidation_buckets(self, symbol: str, bucket_sec: int, n: int,
-                            now: Optional[float] = None) -> List[float]:
+                            now: Optional[float] = None, side: Optional[str] = None) -> List[float]:
         """USD liquidated on `symbol` per bucket for the last `n` buckets,
-        oldest first; the last bucket is the current (partial) one."""
+        oldest first; the last bucket is the current (partial) one. `side`
+        "SELL" counts only liquidated longs, "BUY" only liquidated shorts."""
         now = time.time() if now is None else now
         sums = [0.0] * n
         start = now - bucket_sec * n
         for ev in self.liquidations:
             if ev["symbol"] != symbol or ev["ts"] < start:
+                continue
+            if side is not None and ev["side"] != side:
                 continue
             idx = min(int((ev["ts"] - start) // bucket_sec), n - 1)
             sums[idx] += ev["usd"]

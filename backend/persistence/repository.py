@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from .database import get_session
 from .models import (
     TradeRecord, EquitySnapshot, DailyStats,
-    AgentEquitySnapshot, AgentDailyStats, AgentDecisionLog,
+    AgentEquitySnapshot, AgentDailyStats, AgentDecisionLog, ShadowTrade,
 )
 
 logger = logging.getLogger(__name__)
@@ -376,6 +376,45 @@ class AgentDecisionLogRepository:
 # ══════════════════════════════════════════════════════════════════════════
 # Helper
 # ══════════════════════════════════════════════════════════════════════════
+
+class ShadowTradeRepository:
+    """Upsert/read shadow trades (dicts with ShadowTrade column names; times
+    as ms epochs)."""
+
+    _TIME_COLS = ("created_at", "exit_time")
+
+    def save(self, row: dict) -> None:
+        session = get_session()
+        try:
+            data = {k: (_ms_to_dt(v) if k in self._TIME_COLS else v) for k, v in row.items()
+                    if hasattr(ShadowTrade, k)}
+            session.merge(ShadowTrade(**data))
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            logger.error(f"Failed to save shadow trade {row.get('id')}: {exc}")
+        finally:
+            session.close()
+
+    def get_open(self) -> List[dict]:
+        return self._query(status="open")
+
+    def get_closed(self, since: Optional[datetime] = None) -> List[dict]:
+        return self._query(status="closed", since=since)
+
+    def _query(self, status: str, since: Optional[datetime] = None) -> List[dict]:
+        session = get_session()
+        try:
+            q = session.query(ShadowTrade).filter(ShadowTrade.status == status)
+            if since is not None:
+                q = q.filter(ShadowTrade.created_at >= since)
+            rows = q.order_by(ShadowTrade.created_at.asc()).all()
+            return [{c.name: (_dt_to_ms(getattr(r, c.name)) if c.name in self._TIME_COLS
+                              else getattr(r, c.name)) for c in ShadowTrade.__table__.columns}
+                    for r in rows]
+        finally:
+            session.close()
+
 
 def _dt_to_ms(dt: Optional[datetime]) -> Optional[int]:
     if dt is None:

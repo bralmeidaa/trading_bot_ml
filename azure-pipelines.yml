@@ -251,6 +251,7 @@ stages:
                   curl -fsS -X POST https://trading.bratech.me/api/collector/start || true
                   curl -fsS -X POST https://trading.bratech.me/api/stream/start || true
                   curl -fsS -X POST https://trading.bratech.me/api/agent/start || true
+                  curl -fsS -X POST https://trading.bratech.me/api/hunters/start || true
                 else
                   echo "❌ Dashboard is not accessible (HTTP $response)"
                   exit 1

@@ -16,6 +16,7 @@ os.environ["AUTOSTART_AGENT"] = "0"
 os.environ["AUTOSTART_AGENT_ALERT"] = "0"
 os.environ["AUTOSTART_REGIME_ALERT"] = "0"
 os.environ["AUTOSTART_STREAM"] = "0"
+os.environ["AUTOSTART_HUNTERS"] = "0"
 
 
 def _make_ohlcv(n: int = 500, seed: int = 42, trend: float = 0.0001) -> pd.DataFrame:

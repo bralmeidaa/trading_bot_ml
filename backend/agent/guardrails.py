@@ -10,7 +10,7 @@ pass through.
 """
 from __future__ import annotations
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # v1 basket — the model can never propose a symbol outside this list.
 SYMBOL_ALLOWLIST = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
@@ -26,7 +26,8 @@ def validate_order_request(payload: dict, equity: float, open_notional: Dict[str
                            max_risk_pct: Optional[float] = None,
                            min_stop_pct: Optional[float] = None,
                            max_stop_pct: Optional[float] = None,
-                           cooldown_remaining_sec: float = 0.0) -> Tuple[bool, str]:
+                           cooldown_remaining_sec: float = 0.0,
+                           allowlist: Optional[List[str]] = None) -> Tuple[bool, str]:
     """
     Validate a proposed order BEFORE any paper fill. Rejects (doesn't clamp)
     so a rejection is always visible/loggable rather than silently resized.
@@ -48,8 +49,9 @@ def validate_order_request(payload: dict, equity: float, open_notional: Dict[str
     side = payload.get("side")
     notional = payload.get("notional_usd")
 
-    if not isinstance(symbol, str) or symbol not in SYMBOL_ALLOWLIST:
-        return False, f"symbol '{symbol}' not in allow-list {SYMBOL_ALLOWLIST}"
+    allowed = allowlist or SYMBOL_ALLOWLIST
+    if not isinstance(symbol, str) or symbol not in allowed:
+        return False, f"symbol '{symbol}' not in allow-list {allowed}"
     if not isinstance(side, str) or side.lower() not in VALID_SIDES:
         return False, f"side '{side}' must be one of {VALID_SIDES}"
     if not isinstance(notional, (int, float)) or isinstance(notional, bool):

@@ -132,3 +132,30 @@ class AgentDecisionLog(Base):
     completion_tokens     = Column(Integer,  default=0)
     latency_ms            = Column(Integer,  default=0)
     halted_reason         = Column(String,   nullable=True)   # set if the cycle skipped the LLM entirely
+
+
+class ShadowTrade(Base):
+    """Every candidate a hunter proposed — taken or not — simulated with its
+    own stop/target. Comparing outcomes by `decision` measures whether the
+    LLM judge adds value (approved vs vetoed) and which hunters have an edge."""
+    __tablename__ = "shadow_trades"
+
+    id              = Column(String,   primary_key=True)          # hunter:symbol:bar_ts
+    hunter          = Column(String,   nullable=False, index=True)
+    version         = Column(String,   nullable=False)
+    symbol          = Column(String,   nullable=False, index=True)
+    direction       = Column(Integer,  nullable=False)
+    created_at      = Column(DateTime, nullable=False, index=True)
+    entry_price     = Column(Float,    nullable=False)            # fill incl. costs
+    stop_price      = Column(Float,    nullable=False)
+    target_price    = Column(Float,    nullable=False)
+    stop_pct        = Column(Float,    nullable=False)
+    decision        = Column(String,   nullable=False, index=True) # approved/reduced/vetoed/gated/shadow_only/...
+    decision_reason = Column(Text,     nullable=True)
+    context         = Column(Text,     nullable=True)             # JSON
+    status          = Column(String,   default="open", index=True)
+    exit_time       = Column(DateTime, nullable=True)
+    exit_price      = Column(Float,    nullable=True)
+    exit_reason     = Column(String,   nullable=True)             # stop/target/time
+    r_multiple      = Column(Float,    nullable=True)             # net of costs, in units of initial risk
+    live_trade_id   = Column(String,   nullable=True)             # set when it was actually executed
