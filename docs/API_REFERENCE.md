@@ -102,6 +102,18 @@ será via header `Authorization: Bearer <token>` (planejado, ainda não implemen
 | GET  | `/api/market-sentiment/{symbol}` | Analytics | Sentimento de mercado |
 | POST | `/api/backtest` | Analytics | Disparar backtest |
 | GET  | `/api/backtest/results` | Analytics | Resultados do backtest |
+| POST | `/api/agent/start` · `/api/agent/stop` | AI Agent | Ligar/desligar o agente LLM livre (`ai_agent_v2`) |
+| GET  | `/api/agent` | AI Agent | Status, posições, eventos |
+| GET  | `/api/agent/trades` | AI Agent | Operações fechadas + estatísticas (fonte de verdade) |
+| GET  | `/api/agent/decisions` | AI Agent | Log de decisões do LLM |
+| POST | `/api/agent/alert/test` | AI Agent | Enviar o email diário agora |
+| POST | `/api/stream/start` · GET `/api/stream` | Stream | WebSocket Binance (klines 1m + liquidações) |
+| POST | `/api/hunters/start` · `/api/hunters/stop` | Hunters | Motor caçadores + juiz LLM (`hunter_judge_v1`) |
+| GET  | `/api/hunters` | Hunters | Status do livro, resultado sombra por caçador, valor do juiz |
+| GET  | `/api/hunters/shadow` | Hunters | Linhas recentes do histórico sombra |
+| GET  | `/api/tournament` | Hunters | Torneio: status/escala de risco por estratégia (alocador) |
+| POST | `/api/replay/run?days=120` · GET `/api/replay` | Hunters | Replay dos caçadores no histórico (background) |
+| GET  | `/api/student` · POST `/api/student/run?mode=daily\|weekly` | Hunters | LLM estudante: variantes, lições, execuções |
 
 ---
 
@@ -321,6 +333,37 @@ Dispara `run_backtest.py` em background. Resultado escrito em `backtest_results.
 
 ### `GET /api/backtest/results`
 Retorna o conteúdo de `backtest_results.json`, ou mensagem se ainda não houver.
+
+---
+
+## Hunters, torneio e estudante
+
+Fluxo: caçadores de regra fixa propõem (stop/alvo próprios) → **todo** candidato
+ao vivo vai ao juiz LLM (aprova / reduz / veta) → executa só se o torneio dá
+capital ao caçador e os portões do livro deixam → tudo segue no histórico sombra.
+
+### `GET /api/tournament`
+`strategies[nome]`: `n`, `mean_r`, `p_positive`, `status`
+(`control` / `warming` / `active` / `demoted`), `weight` (Thompson) e
+`risk_scale` (0 = não executa). A evidência é o R **das propostas que o juiz
+aprovou** no sombra (executadas ou não). `warming` (< 30 aprovações fechadas):
+caçador semeado opera a `HUNTER_EXPLORE_SCALE` salvo se o replay deu NO-GO;
+variante do estudante, zero. `llm_discretionary` = agente livre, só comparação.
+
+### `POST /api/replay/run?days=120&symbols=`
+Replay em background (um par por vez; ~10-20 min p/ 120d×15 pares na VM).
+Entrada na abertura da barra seguinte, 0,15%/lado, stop antes do alvo na
+mesma barra. Salva em `REPLAY_REPORT_PATH` e repassa os vereditos ao motor.
+`GET /api/replay` → `{running, error, report}`; `report.report[caçador]` tem
+`n`, `mean_r`, `folds`, `p_positive`, `verdict` (GO / NO-GO / INSUFFICIENT).
+O loop noturno refaz o replay quando o relatório passa de 7 dias.
+
+### `GET /api/student` · `POST /api/student/run?mode=daily|weekly`
+Variantes (`rejected` / `shadow` / `retired`, com evidência pai × variante),
+lições (`active` / `retired`) e o resumo das últimas execuções. `weekly`
+chama o LLM e valida as hipóteses no segmento de teste do replay (pode levar
+dezenas de minutos); `daily` aposenta variantes/lições sem suporte e
+recalcula o torneio. Agendado: `STUDENT_HOUR_UTC` (03), semanal no domingo.
 
 ---
 

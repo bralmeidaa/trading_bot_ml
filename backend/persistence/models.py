@@ -159,3 +159,40 @@ class ShadowTrade(Base):
     exit_reason     = Column(String,   nullable=True)             # stop/target/time
     r_multiple      = Column(Float,    nullable=True)             # net of costs, in units of initial risk
     live_trade_id   = Column(String,   nullable=True)             # set when it was actually executed
+
+
+class StrategyVariant(Base):
+    """A hunter variant proposed by the LLM student: a parent hunter with some
+    parameters changed (within the parent's declared bounds) and/or filters
+    from a closed feature list. Lifecycle: rejected (failed the replay) |
+    shadow (passed; in the tournament, capital only with forward evidence) |
+    retired (lost in forward shadow)."""
+    __tablename__ = "strategy_variants"
+
+    id          = Column(String,   primary_key=True)    # parent~vN
+    parent      = Column(String,   nullable=False, index=True)
+    spec_hash   = Column(String,   nullable=False, index=True)
+    params      = Column(Text,     nullable=False)      # JSON
+    filters     = Column(Text,     nullable=False)      # JSON
+    rationale   = Column(Text,     nullable=True)
+    status      = Column(String,   nullable=False, index=True)
+    evidence    = Column(Text,     nullable=True)       # JSON: replay variant vs parent
+    status_note = Column(Text,     nullable=True)
+    created_at  = Column(DateTime, default=datetime.utcnow)
+    updated_at  = Column(DateTime, default=datetime.utcnow)
+
+
+class AgentLesson(Base):
+    """A pattern the student found and the shadow ledger confirmed (n ≥ 30):
+    goes into the judge's prompt while active (max 10)."""
+    __tablename__ = "agent_lessons"
+
+    id          = Column(String,   primary_key=True)
+    text        = Column(Text,     nullable=False)
+    spec        = Column(Text,     nullable=False)      # JSON: hunter, filters, claim
+    n           = Column(Integer,  nullable=False)
+    mean_r      = Column(Float,    nullable=False)
+    confidence  = Column(Float,    nullable=False)      # posterior P(claim)
+    status      = Column(String,   nullable=False, index=True)   # active / retired
+    created_at  = Column(DateTime, default=datetime.utcnow)
+    updated_at  = Column(DateTime, default=datetime.utcnow)

@@ -7,11 +7,15 @@ Every 5-minute bar close:
   1. refresh 5m bars (REST, incremental) and compute features;
   2. run every hunter on the latest closed bar;
   3. shadow-only hunters (the control) go straight to the shadow ledger;
-  4. live candidates pass the deterministic gates (risk, exposure, cooldown,
-     one position per symbol); gated ones are recorded in the ledger;
-  5. the rest go to ONE LLM call that approves / halves / vetoes each;
-  6. approved ones are executed with their stop/target; every candidate,
-     whatever the verdict, is followed in the shadow ledger.
+  4. every live candidate goes to ONE LLM call that approves / halves /
+     vetoes each — funded or not, so the judge is measured on all of them;
+  5. an approved candidate is executed only if the tournament allocator
+     gives its hunter capital (risk scale > 0, earned by the forward record
+     of the judge's approved picks; NO-GO in replay → none until then) and
+     it passes the book's gates (risk, exposure, cooldown, one position per
+     symbol);
+  6. every candidate, whatever happened, is followed in the shadow ledger
+     with the judge's verdict.
 
 A separate 30s loop enforces stops/targets/time limits on the real book,
 advances the shadow ledger and checks the drawdown kill-switch.
@@ -24,17 +28,18 @@ import math
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import pandas as pd
 
 from backend.agent import guardrails
 from backend.agent.paper_execution import ROUND_TRIP_COST, AgentTrade, PaperBroker
 from backend.agent.tools import build_tool_dispatch
+from backend.allocator.thompson import AllocatorConfig, allocate
 from backend.hunters.base import Candidate, Hunter, ScanContext
 from backend.hunters.features import prepare
 from backend.hunters.judge import run_judge
-from backend.hunters.shadow import ShadowBook
+from backend.hunters.shadow import TAKEN, ShadowBook
 from backend.hunters.strategies import default_hunters
 
 logger = logging.getLogger(__name__)
@@ -68,6 +73,10 @@ class HunterConfig:
     max_drawdown_kill: float = 0.20
     max_llm_calls_per_day: int = 60
     max_tool_turns: int = 6
+    # tournament allocator (backend/allocator)
+    alloc_min_trades: int = 30
+    alloc_explore_scale: float = 0.5
+    alloc_demote_below: float = 0.5
 
 
 @dataclass
@@ -86,7 +95,8 @@ class HunterState:
 
 class HunterEngine:
     def __init__(self, config: HunterConfig, exchange, llm_client, trade_repo=None,
-                 shadow_repo=None, stream=None, hunters: Optional[List[Hunter]] = None):
+                 shadow_repo=None, stream=None, hunters: Optional[List[Hunter]] = None,
+                 notifier: Optional[Callable[[str, str], None]] = None):
         self.config = config
         self.state = HunterState()
         self.exchange = exchange
@@ -103,6 +113,11 @@ class HunterEngine:
         self._daily_start_equity = config.total_capital
         self._news_seen_call: Dict[str, int] = {}
         self._exit_task: Optional[asyncio.Task] = None
+        self.notifier = notifier                       # (subject, body) — email in prod
+        self.allocation: Dict[str, dict] = {}
+        self.replay_verdicts: Dict[str, str] = {}
+        self.lessons: List[str] = []                   # student lessons for the judge prompt
+        self._closed_shadow: List[dict] = []           # in-memory evidence when there's no repo
 
     # ── read helpers ─────────────────────────────────────────────────────
     @property
@@ -126,7 +141,71 @@ class HunterEngine:
             except Exception as exc:
                 logger.error(f"hunter restore (shadow) failed: {exc}")
         self._daily_start_equity = self.broker.equity
+        self.refresh_allocation(notify=False)
         return n
+
+    # ── tournament ───────────────────────────────────────────────────────
+    def _evidence(self) -> Dict[str, List[float]]:
+        """R of every closed shadow candidate the JUDGE APPROVED, per hunter —
+        executed or not. What trades live is "hunter filtered by the judge",
+        so that is what earns capital (a raw-negative hunter can still earn
+        it if the judge's picks are positive)."""
+        rows = self._closed_shadow
+        if self.shadow_repo:
+            try:
+                rows = self.shadow_repo.get_closed()
+            except Exception as exc:
+                logger.warning(f"allocator: shadow read failed: {exc}")
+        out: Dict[str, List[float]] = {}
+        for r in rows:
+            if r.get("r_multiple") is not None and r.get("decision") in TAKEN:
+                out.setdefault(r["hunter"], []).append(float(r["r_multiple"]))
+        return out
+
+    def set_replay_verdicts(self, report: Optional[dict]):
+        """{hunter: GO / NO-GO / INSUFFICIENT} from a replay report: a seeded
+        hunter that is NO-GO in replay gets no exploration capital."""
+        self.replay_verdicts = {name: rep.get("verdict") for name, rep in
+                                ((report or {}).get("report") or {}).items()}
+        self.refresh_allocation(notify=False)
+
+    def refresh_allocation(self, notify: bool = True) -> Dict[str, dict]:
+        """Recompute every hunter's tournament status and risk scale from its
+        closed shadow trades. Status changes are announced via `notifier`."""
+        cfg = AllocatorConfig(min_trades=self.config.alloc_min_trades,
+                              explore_scale=self.config.alloc_explore_scale,
+                              demote_below=self.config.alloc_demote_below)
+        meta = {h.name: {"live": h.live, "variant": h.parent is not None,
+                         "replay": self.replay_verdicts.get(h.name)} for h in self.hunters}
+        new = allocate(self._evidence(), meta, cfg)
+        changes = [(name, self.allocation[name]["status"], row)
+                   for name, row in new.items()
+                   if name in self.allocation and self.allocation[name]["status"] != row["status"]]
+        self.allocation = new
+        if notify and changes and self.notifier:
+            lines = [f"{name}: {old} -> {row['status']} (n={row['n']}, mean {row['mean_r']}R, "
+                     f"P(edge>0)={row['p_positive']}, risk scale {row['risk_scale']})"
+                     for name, old, row in changes]
+            try:
+                self.notifier(f"[hunters] tournament: {len(changes)} status change(s)",
+                              "\n".join(lines))
+            except Exception as exc:
+                logger.warning(f"allocator notice failed: {exc}")
+        return new
+
+    def risk_scale(self, hunter: Hunter) -> float:
+        row = self.allocation.get(hunter.name)
+        if row is not None:
+            return float(row["risk_scale"])
+        if (not hunter.live or hunter.parent is not None
+                or self.replay_verdicts.get(hunter.name) == "NO-GO"):
+            return 0.0
+        return self.config.alloc_explore_scale
+
+    def set_variants(self, variants: List[Hunter]):
+        """Swap the student's variants in (seeded hunters stay)."""
+        self.hunters = [h for h in self.hunters if h.parent is None] + list(variants)
+        self.refresh_allocation(notify=False)
 
     # ── market data ──────────────────────────────────────────────────────
     def _fetch_bars(self, symbol: str, now_ms: int) -> pd.DataFrame:
@@ -225,57 +304,57 @@ class HunterEngine:
                 self._last_candidate_ms[key] = now_ms
                 found.append(c)
 
-        summary = {"candidates": len(found), "shadow_only": 0, "gated": 0, "judged": 0,
-                   "executed": 0, "errors": errors}
+        summary = {"candidates": len(found), "shadow_only": 0, "judged": 0, "unfunded": 0,
+                   "gated": 0, "executed": 0, "errors": errors}
         if not found:
             return self._finish_scan(summary)
         self.state.candidates_today += len(found)
         prices = self._prices([c.symbol for c in found])
 
+        # Every live candidate is judged, funded or not: the judge's verdict is
+        # recorded as-is (that's what the tournament allocates on), and only
+        # execution depends on tournament capital and the book's gates.
         to_judge: List[Candidate] = []
-        payloads: Dict[str, dict] = {}
-        block = self._block_reason()
         for c in found:
-            price = prices.get(c.symbol, c.ref_price)
             if not c.live:
-                self.shadow.open(c, "shadow_only", "shadow-only hunter", price, now_ms)
+                self.shadow.open(c, "shadow_only", "shadow-only hunter",
+                                 prices.get(c.symbol, c.ref_price), now_ms)
                 summary["shadow_only"] += 1
-                continue
-            payload = self._sized_payload(c)
-            reason = block or self._gate(c, payload)
-            if reason is None and any(x.symbol == c.symbol for x in to_judge):
-                reason = "another candidate on this symbol in the same scan"
-            if reason:
-                self.shadow.open(c, f"gated:{reason[:60]}", reason, price, now_ms)
-                summary["gated"] += 1
-                continue
-            to_judge.append(c)
-            payloads[c.id] = payload
+            else:
+                to_judge.append(c)
+        if not to_judge:
+            return self._finish_scan(summary)
 
-        if to_judge:
-            verdicts = self._judge(to_judge)
-            summary["judged"] = len(to_judge)
-            for c in to_judge:
-                decision, rationale = verdicts[c.id]
-                price = prices.get(c.symbol, c.ref_price)
-                trade_id = None
-                if decision in ("approved", "reduced"):
-                    payload = self._sized_payload(c, 0.5 if decision == "reduced" else 1.0)
-                    late = self._gate(c, payload)       # earlier fills in this batch change exposure
-                    if late:
-                        decision, rationale = f"gated:{late[:60]}", f"approved, then blocked: {late}"
-                    else:
-                        try:
-                            trade = self.broker.place_order(
-                                c.symbol, c.side, payload["notional_usd"],
-                                f"[{c.hunter}] {c.rationale} | judge: {rationale}",
-                                stop_pct=c.stop_pct, target_pct=c.target_pct)
-                            trade_id = trade.id
-                            summary["executed"] += 1
-                            self.state.executed_today += 1
-                        except Exception as exc:
-                            decision, rationale = "error", f"execution failed: {exc}"
-                self.shadow.open(c, decision, rationale, price, now_ms, live_trade_id=trade_id)
+        verdicts = self._judge(to_judge)
+        summary["judged"] = len(to_judge)
+        block = self._block_reason()
+        scales = {h.name: self.risk_scale(h) for h in self.hunters}
+        for c in to_judge:
+            decision, rationale = verdicts[c.id]
+            price = prices.get(c.symbol, c.ref_price)
+            trade_id = None
+            if decision in TAKEN:
+                scale = scales.get(c.hunter, 0.0)
+                payload = self._sized_payload(c, scale * (0.5 if decision == "reduced" else 1.0))
+                if scale <= 0:
+                    st = self.allocation.get(c.hunter, {}).get("status", "unallocated")
+                    rationale = f"[not executed: no tournament capital ({st})] {rationale}"
+                    summary["unfunded"] += 1
+                elif (reason := block or self._gate(c, payload)):   # earlier fills change exposure
+                    rationale = f"[not executed: {reason}] {rationale}"
+                    summary["gated"] += 1
+                else:
+                    try:
+                        trade = self.broker.place_order(
+                            c.symbol, c.side, payload["notional_usd"],
+                            f"[{c.hunter}] {c.rationale} | judge: {rationale}",
+                            stop_pct=c.stop_pct, target_pct=c.target_pct)
+                        trade_id = trade.id
+                        summary["executed"] += 1
+                        self.state.executed_today += 1
+                    except Exception as exc:
+                        rationale = f"[not executed: {exc}] {rationale}"
+            self.shadow.open(c, decision, rationale, price, now_ms, live_trade_id=trade_id)
         return self._finish_scan(summary)
 
     def _finish_scan(self, summary: dict) -> dict:
@@ -293,7 +372,8 @@ class HunterEngine:
                                        guardrail_check=lambda p: (False, "read-only"),
                                        news_tracker=self._annotate_news)
         verdicts, result = run_judge(self.llm_client, candidates, handlers,
-                                     max_tool_turns=self.config.max_tool_turns)
+                                     max_tool_turns=self.config.max_tool_turns,
+                                     lessons=self.lessons)
         self.state.llm_calls_today += 1
         self.state.tokens_today += (result.prompt_tokens or 0) + (result.completion_tokens or 0)
         return verdicts
@@ -315,6 +395,7 @@ class HunterEngine:
         if day != self.state.day:
             if self.state.day is not None:
                 self._daily_start_equity = self.broker.equity
+                self.refresh_allocation()
             self.state.day = day
             self.state.candidates_today = self.state.executed_today = 0
             self.state.llm_calls_today = self.state.tokens_today = 0
@@ -334,7 +415,9 @@ class HunterEngine:
                     closed.append(t)
         for sym in set(r["symbol"] for r in self.shadow.open_rows.values()):
             if sym in prices:
-                self.shadow.update(sym, now_ms, price=prices[sym])
+                done = self.shadow.update(sym, now_ms, price=prices[sym])
+                if not self.shadow_repo:
+                    self._closed_shadow.extend(done)
         self.broker.mark_to_market({s: p for s, p in prices.items() if s in self.broker.open_trades})
         return closed
 
@@ -391,6 +474,8 @@ class HunterEngine:
             "last_scan_at": (datetime.utcfromtimestamp(s.last_scan_at).isoformat()
                              if s.last_scan_at else None),
             "last_scan": s.last_scan_summary,
-            "hunters": [{"name": h.name, "version": h.version, "live": h.live} for h in self.hunters],
+            "hunters": [{"name": h.name, "version": h.version, "live": h.live, "parent": h.parent,
+                         "tournament": self.allocation.get(h.name)} for h in self.hunters],
+            "lessons": self.lessons,
             "universe": self.config.universe,
         }

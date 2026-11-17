@@ -236,6 +236,13 @@ class FixedHunter(Hunter):
         return self._candidate(symbol, df.iloc[-1], self.direction, 0.02, 0.04, f"{self.name} fired")
 
 
+def _approve_all(messages, tools, dispatch, max_tool_turns=6):
+    cands = json.loads(messages[1]["content"].split("\n", 1)[1])
+    dispatch["submit_verdicts"]({"verdicts": [{"candidate_id": c["candidate_id"], "decision": "approve",
+                                               "rationale": "ok"} for c in cands]})
+    return ChatResult(text="ok")
+
+
 def _engine(hunters, llm, **cfg):
     config = HunterConfig(universe=["BTC/USDT", "ETH/USDT", "SOL/USDT"], **cfg)
     return HunterEngine(config, FakeBarsExchange(), llm, hunters=hunters)
@@ -258,7 +265,8 @@ class TestHunterEngine:
         llm.chat_with_tools = judge_all
 
         s = eng.scan_once(now_ms=NOW)
-        assert s == {"candidates": 3, "shadow_only": 1, "gated": 0, "judged": 2, "executed": 1, "errors": 0}
+        assert s == {"candidates": 3, "shadow_only": 1, "judged": 2, "unfunded": 0, "gated": 0,
+                     "executed": 1, "errors": 0}
         assert set(eng.broker.open_trades) == {"BTC/USDT"}
         decisions = sorted(r["decision"] for r in eng.shadow.open_rows.values())
         assert decisions == ["approved", "shadow_only", "vetoed"]
@@ -268,10 +276,15 @@ class TestHunterEngine:
         assert risk <= 0.01 * 500 + 1e-6
 
     def test_open_symbol_is_gated_and_cooldown_suppresses_repeat(self):
-        eng = _engine([FixedHunter("live_a", ["BTC/USDT"])], _llm_submitting())
+        llm = _llm_submitting()
+        llm.chat_with_tools = _approve_all
+        eng = _engine([FixedHunter("live_a", ["BTC/USDT"])], llm)
         eng.broker.place_order("BTC/USDT", "buy", 20.0, "pre", stop_pct=0.02, target_pct=0.04)
         s = eng.scan_once(now_ms=NOW)
-        assert s["gated"] == 1 and s["judged"] == 0
+        assert s["judged"] == 1 and s["gated"] == 1 and s["executed"] == 0
+        row = next(iter(eng.shadow.open_rows.values()))
+        assert row["decision"] == "approved"                     # the verdict is kept as evidence
+        assert row["decision_reason"].startswith("[not executed: symbol already has an open position")
         assert eng.scan_once(now_ms=NOW + BAR_MS)["candidates"] == 0       # same hunter+symbol within 1h
 
     def test_reduce_halves_size_and_budget_blocks_judge(self):
@@ -282,7 +295,7 @@ class TestHunterEngine:
             return ChatResult(text="ok")
         llm = _llm_submitting()
         llm.chat_with_tools = reduce_all
-        eng = _engine(hunters, llm)
+        eng = _engine(hunters, llm, alloc_explore_scale=1.0)
         eng.scan_once(now_ms=NOW)
         notional = eng.broker.open_notional()["BTC/USDT"]
         full = min(0.01 * 500 / 0.02, 0.15 * 500)

@@ -65,6 +65,15 @@ _READ_TOOLS = ("get_market_context", "get_news_digest", "get_positions")
 _DECISION = {"approve": "approved", "reduce": "reduced", "veto": "vetoed"}
 
 
+def system_prompt(lessons: List[str] = None) -> str:
+    """JUDGE_PROMPT plus the student's active lessons — each one already
+    verified on >= 30 closed shadow trades (backend/student)."""
+    if not lessons:
+        return JUDGE_PROMPT
+    return (JUDGE_PROMPT + "\n\nLessons measured on this system's own past candidates "
+            "(use them as evidence, not as rules):\n" + "\n".join(f"- {l}" for l in lessons))
+
+
 def judge_tools() -> List[dict]:
     return [t for t in TOOL_SCHEMAS if t["function"]["name"] in _READ_TOOLS] + [VERDICT_SCHEMA]
 
@@ -78,7 +87,8 @@ def describe(c: Candidate) -> dict:
 
 def run_judge(llm_client, candidates: List[Candidate],
               read_handlers: Dict[str, Callable[[dict], dict]],
-              max_tool_turns: int = 6) -> Tuple[Dict[str, Tuple[str, str]], object]:
+              max_tool_turns: int = 6,
+              lessons: List[str] = None) -> Tuple[Dict[str, Tuple[str, str]], object]:
     """Returns ({candidate_id: (decision, rationale)}, ChatResult). Every
     candidate gets a verdict; failures become ('vetoed', reason)."""
     submitted: Dict[str, Tuple[str, str]] = {}
@@ -94,7 +104,7 @@ def run_judge(llm_client, candidates: List[Candidate],
     dispatch = {name: read_handlers[name] for name in _READ_TOOLS if name in read_handlers}
     dispatch["submit_verdicts"] = _submit
     messages = [
-        {"role": "system", "content": JUDGE_PROMPT},
+        {"role": "system", "content": system_prompt(lessons)},
         {"role": "user", "content": "Candidates:\n" + json.dumps([describe(c) for c in candidates], indent=1)},
     ]
     result = llm_client.chat_with_tools(messages, judge_tools(), dispatch, max_tool_turns=max_tool_turns)

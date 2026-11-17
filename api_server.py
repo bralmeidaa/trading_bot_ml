@@ -375,10 +375,23 @@ async def start_hunters():
         )
         exchange = await asyncio.to_thread(lambda: ccxt.binance({"enableRateLimit": True}))
         stream = stream_service if (stream_task and not stream_task.done()) else None
+        from backend.alerts.notice import email_notice
+        cfg.alloc_explore_scale = float(os.getenv("HUNTER_EXPLORE_SCALE", str(cfg.alloc_explore_scale)))
         hunter_engine = HunterEngine(cfg, exchange, AgentLLMClient(llm_cfg),
                                      trade_repo=TradeRepository(),
-                                     shadow_repo=ShadowTradeRepository(), stream=stream)
+                                     shadow_repo=ShadowTradeRepository(), stream=stream,
+                                     notifier=email_notice)
         restored = await asyncio.to_thread(hunter_engine.restore)
+        report = _load_replay_report()
+        if report:
+            hunter_engine.set_replay_verdicts(report)
+        student = _get_student()
+        if student is not None:
+            student.engine = hunter_engine
+            try:
+                await asyncio.to_thread(student.apply_to_engine)    # variants + lessons from the DB
+            except Exception as exc:
+                logger.warning(f"student apply on hunter start failed: {exc}")
         hunter_task = asyncio.create_task(hunter_engine.start())
         return ok({"message": "hunter engine started (paper)", "book": cfg.bot_id,
                    "restored_open_positions": restored,
@@ -429,6 +442,194 @@ async def get_hunters_shadow(limit: int = 100):
     rows = repo.get_open() + repo.get_closed()
     rows.sort(key=lambda r: r["created_at"] or 0, reverse=True)
     return ok({"rows": rows[:limit]})
+
+
+# ── Tournament, replay and the LLM student ─────────────────────────────────
+replay_task: Optional[asyncio.Task] = None
+replay_last: Optional[dict] = None
+student_service = None       # type: ignore
+student_task: Optional[asyncio.Task] = None
+student_job: Optional[asyncio.Task] = None
+
+
+def _replay_report_path() -> str:
+    return os.getenv("REPLAY_REPORT_PATH", os.path.join("data", "replay_last.json"))
+
+
+def _get_student():
+    """Lazily built; None when the LLM isn't configured."""
+    global student_service
+    if student_service is None:
+        from backend.agent.llm_client import AgentLLMClient, config_from_env
+        llm_cfg = config_from_env()
+        if llm_cfg is None:
+            return None
+        from backend.alerts.notice import email_notice
+        from backend.persistence.database import init_db
+        from backend.persistence.repository import (LessonRepository, ShadowTradeRepository,
+                                                    StrategyVariantRepository)
+        from backend.student.student import Student
+        init_db()
+        student_service = Student(AgentLLMClient(llm_cfg), ShadowTradeRepository(),
+                                  StrategyVariantRepository(), LessonRepository(),
+                                  engine=hunter_engine, notifier=email_notice)
+    return student_service
+
+
+@app.get("/api/tournament", tags=["Hunters"],
+         summary="Strategy tournament: forward shadow record, allocator status and risk scale per hunter")
+async def get_tournament():
+    from backend.agent.stats import trade_stats
+    from backend.allocator.thompson import cash_weight
+    from backend.persistence.database import init_db
+    from backend.persistence.repository import TradeRepository
+    init_db()
+    if hunter_engine is not None:
+        allocation = hunter_engine.allocation
+    else:
+        from backend.hunters.engine import HunterConfig, HunterEngine
+        from backend.persistence.repository import ShadowTradeRepository
+        allocation = HunterEngine(HunterConfig(), None, None,
+                                  shadow_repo=ShadowTradeRepository()).refresh_allocation(notify=False)
+    agent = trade_stats(TradeRepository().get_closed_trades(os.getenv("AGENT_BOT_ID", "ai_agent_v2")))
+    return ok({
+        "strategies": allocation, "cash_weight": cash_weight(allocation),
+        "rules": {"min_trades": 30, "explore_scale": float(os.getenv("HUNTER_EXPLORE_SCALE", "0.5")),
+                  "demote_below_p_positive": 0.5},
+        # the free-form LLM agent trades its own book; shown for comparison only
+        "llm_discretionary": {"n": agent.get("n"), "expectancy_r": agent.get("expectancy_r"),
+                              "net_pnl": agent.get("net_pnl"), "win_rate": agent.get("win_rate")},
+    })
+
+
+@app.post("/api/replay/run", tags=["Hunters"],
+          summary="Replay the hunters over cached Binance history (background)")
+async def run_replay_endpoint(days: int = 120, symbols: str = ""):
+    global replay_task
+    if replay_task and not replay_task.done():
+        raise HTTPException(400, "a replay is already running")
+    if not 7 <= days <= 365:
+        raise HTTPException(400, "days must be between 7 and 365")
+
+    replay_task = asyncio.create_task(asyncio.to_thread(
+        _run_replay_job, days, [s for s in symbols.split(",") if s] or None))
+    return ok({"message": f"replay started ({days}d)", "poll": "/api/replay"})
+
+
+def _run_replay_job(days: int = 120, symbols=None) -> dict:
+    """Blocking. Replays the seeded hunters, saves the report and hands the
+    verdicts to the running hunter engine (NO-GO → no exploration capital)."""
+    global replay_last
+    import json as _json
+    import time as _time
+    from backend.hunters.strategies import default_hunters
+    from backend.replay.run import DAY_MS, run_replay
+    end = int(_time.time() * 1000) // DAY_MS * DAY_MS
+    res = run_replay(default_hunters(), end - days * DAY_MS, end, symbols=symbols, keep_trades=False)
+    res["generated_at"] = _time.time()
+    replay_last = res
+    try:
+        path = _replay_report_path()
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            _json.dump(res, f, default=str)
+    except Exception as exc:
+        logger.warning(f"replay report not saved: {exc}")
+    if hunter_engine is not None:
+        hunter_engine.set_replay_verdicts(res)
+    return res
+
+
+def _load_replay_report() -> Optional[dict]:
+    if replay_last is not None:
+        return replay_last
+    path = _replay_report_path()
+    if not os.path.exists(path):
+        return None
+    try:
+        import json as _json
+        with open(path, encoding="utf-8") as f:
+            return _json.load(f)
+    except Exception as exc:
+        logger.warning(f"replay report unreadable: {exc}")
+        return None
+
+
+@app.get("/api/replay", tags=["Hunters"], summary="Last replay report")
+async def get_replay():
+    report = _load_replay_report()
+    running = replay_task is not None and not replay_task.done()
+    error = None
+    if replay_task is not None and replay_task.done() and replay_task.exception():
+        error = str(replay_task.exception())
+    return ok({"running": running, "error": error, "report": report})
+
+
+@app.get("/api/student", tags=["Hunters"], summary="LLM student: variants, lessons, last runs")
+async def get_student():
+    from backend.persistence.database import init_db
+    from backend.persistence.repository import LessonRepository, StrategyVariantRepository
+    init_db()
+    st = student_service
+    return ok({
+        "loop_running": student_task is not None and not student_task.done(),
+        "job_running": student_job is not None and not student_job.done(),
+        "variants": StrategyVariantRepository().list(),
+        "lessons": LessonRepository().list(),
+        "last_daily": st.last_daily if st else None,
+        "last_weekly": st.last_weekly if st else None,
+    })
+
+
+@app.post("/api/student/run", tags=["Hunters"],
+          summary="Run the student now: mode=daily (light) or weekly (LLM + replay validation)")
+async def run_student(mode: str = "daily"):
+    global student_job
+    if mode not in ("daily", "weekly"):
+        raise HTTPException(400, "mode must be daily or weekly")
+    if student_job and not student_job.done():
+        raise HTTPException(400, "a student job is already running")
+    st = _get_student()
+    if st is None:
+        raise HTTPException(400, "Azure AI Foundry not configured — the student needs it")
+    student_job = asyncio.create_task(asyncio.to_thread(getattr(st, mode)))
+    return ok({"message": f"student {mode} run started", "poll": "/api/student"})
+
+
+async def _student_loop():
+    """Off-hours: daily light run at STUDENT_HOUR_UTC (default 03 UTC = 00h
+    BRT); on STUDENT_WEEKLY_DOW (default 6 = Sunday) the full weekly run.
+    First refreshes the 120-day replay report when it is over a week old."""
+    global student_job
+    import time as _time
+    hour = int(os.getenv("STUDENT_HOUR_UTC", "3"))
+    weekly_dow = int(os.getenv("STUDENT_WEEKLY_DOW", "6"))
+    while True:
+        now = datetime.utcnow()
+        target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        await asyncio.sleep(max(60, (target - now).total_seconds()))
+        report = _load_replay_report()
+        stale = report is None or _time.time() - float(report.get("generated_at") or 0) > 7 * 86400
+        if stale and not (replay_task and not replay_task.done()):
+            try:
+                await asyncio.to_thread(_run_replay_job, 120)
+                logger.info("weekly replay refreshed")
+            except Exception as exc:
+                logger.warning(f"replay refresh failed: {exc}")
+        st = _get_student()
+        if st is None or (student_job and not student_job.done()):
+            continue
+        mode = "weekly" if datetime.utcnow().weekday() == weekly_dow else "daily"
+        try:
+            student_job = asyncio.create_task(asyncio.to_thread(getattr(st, mode)))
+            await student_job
+            logger.info(f"student {mode} run done")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(f"student {mode} run failed: {exc}")
 
 
 @app.post("/api/stream/start", tags=["Stream"], summary="Start the Binance WebSocket stream")
@@ -528,7 +729,7 @@ async def _shutdown_agent():
     already in the DB (persisted on every change) and come back via restore()."""
     if stream_service:
         stream_service.halted = True
-    for task in (agent_task, hunter_task, stream_task):
+    for task in (agent_task, hunter_task, stream_task, student_task):
         if task and not task.done():
             task.cancel()
             try:
@@ -790,7 +991,7 @@ async def _autostart():
     cross-sectional engine stays intact and startable manually via
     POST /api/portfolio/start, but is no longer auto-launched) — revert by
     flipping these two env vars back, no code change needed."""
-    global regime_alert_task, agent_alert_task
+    global regime_alert_task, agent_alert_task, student_task
     if os.getenv("AUTOSTART_COLLECTOR", "1") != "0":
         try:
             msg = await _launch_collector()
@@ -821,6 +1022,12 @@ async def _autostart():
             logger.info("autostart: hunter engine started")
         except Exception as exc:
             logger.warning(f"autostart hunter engine failed: {exc}")
+    if os.getenv("AUTOSTART_STUDENT", "1") != "0":
+        try:
+            student_task = asyncio.create_task(_student_loop())
+            logger.info("autostart: student loop started")
+        except Exception as exc:
+            logger.warning(f"autostart student failed: {exc}")
     if os.getenv("AUTOSTART_AGENT_ALERT", "1") != "0":
         try:
             agent_alert_task = asyncio.create_task(_agent_alert_loop())

@@ -62,4 +62,8 @@ def prepare(bars: pd.DataFrame) -> pd.DataFrame:
     df["atr15_pct"] = _atr15_pct(df)
     df["pdh"], df["pdl"] = _prior_day_levels(df)
     _session_ranges(df)
+    # context for the student's filters / lessons (all trailing, causal)
+    df["ret_1h"] = df["close"].pct_change(60 // BAR_MIN)
+    df["ret_4h"] = df["close"].pct_change(240 // BAR_MIN)
+    df["vol_ratio"] = df["volume"] / df["volume"].rolling(48, min_periods=12).mean()
     return df

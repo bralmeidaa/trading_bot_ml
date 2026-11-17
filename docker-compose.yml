@@ -36,6 +36,15 @@ services:
       - AUTOSTART_HUNTERS=${AUTOSTART_HUNTERS:-1}
       - HUNTER_TOTAL_CAPITAL=${HUNTER_TOTAL_CAPITAL:-500.0}
       - HUNTER_MAX_LLM_CALLS_PER_DAY=${HUNTER_MAX_LLM_CALLS_PER_DAY:-60}
+      # Tournament: hunters with < 30 forward shadow trades trade at this
+      # fraction of normal risk (student variants: zero until they have 30).
+      - HUNTER_EXPLORE_SCALE=${HUNTER_EXPLORE_SCALE:-0.5}
+      # LLM student: daily light run at STUDENT_HOUR_UTC (03 UTC = 00h BRT),
+      # full run (LLM hypotheses + replay validation) on Sundays.
+      - AUTOSTART_STUDENT=${AUTOSTART_STUDENT:-1}
+      - STUDENT_HOUR_UTC=${STUDENT_HOUR_UTC:-3}
+      - KLINES_CACHE_DIR=/app/klines_cache
+      - REPLAY_REPORT_PATH=/app/data/replay_last.json
       - LIQUIDATIONS_DIR=/app/liquidations_data
       - AGENT_CYCLE_INTERVAL_SEC=${AGENT_CYCLE_INTERVAL_SEC:-1800}
       # Outside business hours, LLM decision cycles slow down (token-cost
@@ -87,6 +96,8 @@ services:
       - /opt/trading-bot-data/orderbook_data:/app/orderbook_data
       # Liquidation history recorded from the Binance futures stream.
       - /opt/trading-bot-data/liquidations_data:/app/liquidations_data
+      # Month-sharded Binance klines for the replay simulator (no re-download per deploy).
+      - /opt/trading-bot-data/klines_cache:/app/klines_cache
       # Paper-trading SQLite DB (+ its -wal/-shm) on the same persistent mount.
       - /opt/trading-bot-data/db:/app/data
     restart: unless-stopped

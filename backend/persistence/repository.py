@@ -16,6 +16,7 @@ from .database import get_session
 from .models import (
     TradeRecord, EquitySnapshot, DailyStats,
     AgentEquitySnapshot, AgentDailyStats, AgentDecisionLog, ShadowTrade,
+    StrategyVariant, AgentLesson,
 )
 
 logger = logging.getLogger(__name__)
@@ -414,6 +415,67 @@ class ShadowTradeRepository:
                     for r in rows]
         finally:
             session.close()
+
+
+class _JsonRowRepository:
+    """Upsert/list rows of a small table as plain dicts; JSON columns are
+    (de)serialized, timestamps returned as ISO strings."""
+    model = None
+    json_cols: tuple = ()
+
+    def save(self, row: dict) -> None:
+        import json
+        session = get_session()
+        try:
+            data = {}
+            for k, v in row.items():
+                if not hasattr(self.model, k):
+                    continue
+                if k in self.json_cols and not isinstance(v, str):
+                    v = json.dumps(v)
+                elif k in ("created_at", "updated_at") and isinstance(v, str):
+                    v = datetime.fromisoformat(v)        # a row read back via list()
+                data[k] = v
+            data["updated_at"] = datetime.utcnow()
+            session.merge(self.model(**data))
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            logger.error(f"Failed to save {self.model.__tablename__} {row.get('id')}: {exc}")
+        finally:
+            session.close()
+
+    def list(self, status: Optional[str] = None) -> List[dict]:
+        import json
+        session = get_session()
+        try:
+            q = session.query(self.model)
+            if status is not None:
+                q = q.filter(self.model.status == status)
+            out = []
+            for r in q.order_by(self.model.created_at.asc()).all():
+                row = {}
+                for c in self.model.__table__.columns:
+                    v = getattr(r, c.name)
+                    if c.name in self.json_cols and v:
+                        v = json.loads(v)
+                    elif isinstance(v, datetime):
+                        v = v.isoformat()
+                    row[c.name] = v
+                out.append(row)
+            return out
+        finally:
+            session.close()
+
+
+class StrategyVariantRepository(_JsonRowRepository):
+    model = StrategyVariant
+    json_cols = ("params", "filters", "evidence")
+
+
+class LessonRepository(_JsonRowRepository):
+    model = AgentLesson
+    json_cols = ("spec",)
 
 
 def _dt_to_ms(dt: Optional[datetime]) -> Optional[int]:

@@ -213,7 +213,7 @@ stages:
                 set -e
 
                 echo "📁 Ensuring persistent host data dirs (outside deploy dir, owned by container uid 1000)..."
-                sudo mkdir -p /opt/trading-bot-data/orderbook_data /opt/trading-bot-data/db /opt/trading-bot-data/liquidations_data
+                sudo mkdir -p /opt/trading-bot-data/orderbook_data /opt/trading-bot-data/db /opt/trading-bot-data/liquidations_data /opt/trading-bot-data/klines_cache
                 sudo chown -R 1000:1000 /opt/trading-bot-data
 
                 echo "🔄 Pulling latest image..."
