@@ -39,6 +39,15 @@ services:
       # Tournament: hunters with < 30 forward shadow trades trade at this
       # fraction of normal risk (student variants: zero until they have 30).
       - HUNTER_EXPLORE_SCALE=${HUNTER_EXPLORE_SCALE:-0.5}
+      # Evidence counts EVENTS: same hunter + direction within N minutes = 1.
+      # Full risk only after N events or N days of record (capped at the
+      # explore scale until then).
+      - HUNTER_CLUSTER_MIN=${HUNTER_CLUSTER_MIN:-60}
+      - HUNTER_FULL_RISK_EVENTS=${HUNTER_FULL_RISK_EVENTS:-60}
+      - HUNTER_FULL_RISK_DAYS=${HUNTER_FULL_RISK_DAYS:-14}
+      # Judge vetoes: auto = ignored (executed at half size) until >= 20 closed
+      # vetoed candidates lost on average and the judge adds value; on / off.
+      - HUNTER_JUDGE_VETO=${HUNTER_JUDGE_VETO:-auto}
       # LLM student: daily light run at STUDENT_HOUR_UTC (03 UTC = 00h BRT),
       # full run (LLM hypotheses + replay validation) on Sundays.
       - AUTOSTART_STUDENT=${AUTOSTART_STUDENT:-1}

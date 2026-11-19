@@ -19,7 +19,15 @@ Rules (paper money, but the same rules would hold for real money):
     the best strategy's weight and confidence ramps linearly from 0 at
     `demote_below` to 1 at `full_confidence_at` p_positive. Full risk needs
     both: leading the field AND P(edge > 0) ≥ 0.9;
+  - even then, risk is capped at `capped_scale` until the record is long
+    enough to trust: `full_risk_min_events` events OR `full_risk_min_days`
+    days between the first and the last one;
   - shadow-only controls never get capital.
+
+Evidence is counted in EVENTS, not trades (`cluster_events`): one liquidation
+cascade fires the same hunter on 4-5 coins in the same direction within
+minutes, and those trades win or lose together — counting them separately
+would make 6 correlated bets look like 6 independent ones.
 """
 from __future__ import annotations
 
@@ -77,12 +85,35 @@ def thompson_weights(samples_by_name: Dict[str, List[float]], draws: int = 4000,
     return {name: float((best == k).mean()) for k, name in enumerate(names + [CASH])}
 
 
+def cluster_events(rows: Iterable[dict], window_ms: int) -> List[float]:
+    """Collapse trades of one strategy into events: rows with the same
+    direction whose `created_at` falls within `window_ms` of the first row of
+    the open group count as ONE observation (their mean R). Rows without a
+    timestamp are their own event. Returns one R per event, in time order."""
+    rows = sorted(rows, key=lambda r: (r.get("created_at") is None, r.get("created_at") or 0))
+    events: List[List[float]] = []
+    open_groups: Dict[object, tuple] = {}          # direction -> (start_ms, index into events)
+    for r in rows:
+        ts, d = r.get("created_at"), r.get("direction")
+        g = open_groups.get(d)
+        if ts is not None and g is not None and ts - g[0] <= window_ms:
+            events[g[1]].append(float(r["r_multiple"]))
+            continue
+        events.append([float(r["r_multiple"])])
+        if ts is not None:
+            open_groups[d] = (ts, len(events) - 1)
+    return [float(np.mean(e)) for e in events]
+
+
 @dataclass
 class AllocatorConfig:
-    min_trades: int = 30
+    min_trades: int = 30                 # in events (see cluster_events)
     explore_scale: float = 0.5
     demote_below: float = 0.5
     full_confidence_at: float = 0.9
+    full_risk_min_events: int = 60
+    full_risk_min_days: float = 14.0
+    capped_scale: float = 0.5
 
 
 def summarize(rs: List[float]) -> dict:
@@ -95,7 +126,8 @@ def summarize(rs: List[float]) -> dict:
 
 def allocate(r_by_strategy: Dict[str, List[float]], meta: Dict[str, dict],
              cfg: Optional[AllocatorConfig] = None) -> Dict[str, dict]:
-    """`meta[name]`: {"live": bool, "variant": bool, "replay": verdict|None}. Returns, per strategy,
+    """`meta[name]`: {"live": bool, "variant": bool, "replay": verdict|None,
+    "trades": raw trade count, "span_days": days covered by the evidence}. Returns, per strategy,
     its stats, status (control / warming / active / demoted), Thompson weight
     and the risk scale the live engine applies (0 = shadow only)."""
     cfg = cfg or AllocatorConfig()
@@ -104,6 +136,8 @@ def allocate(r_by_strategy: Dict[str, List[float]], meta: Dict[str, dict],
     for name, m in meta.items():
         rs = list(r_by_strategy.get(name, []))
         row = summarize(rs)
+        row["trades"] = int(m.get("trades", row["n"]))
+        row["capped"] = False
         if not m.get("live", True):
             row.update(status="control", risk_scale=0.0)
         elif row["n"] < cfg.min_trades:
@@ -125,7 +159,12 @@ def allocate(r_by_strategy: Dict[str, List[float]], meta: Dict[str, dict],
         row["weight"] = round(w, 4)
         if row["status"] == "active":
             conf = min(1.0, max(0.0, (row["p_positive"] - cfg.demote_below) / span))
-            row["risk_scale"] = round((w / top if top > 0 else 0.0) * conf, 4)
+            scale = (w / top if top > 0 else 0.0) * conf
+            seasoned = (row["n"] >= cfg.full_risk_min_events
+                        or float(meta[name].get("span_days", 0.0)) >= cfg.full_risk_min_days)
+            if not seasoned and scale > cfg.capped_scale:
+                scale, row["capped"] = cfg.capped_scale, True
+            row["risk_scale"] = round(scale, 4)
     return out
 
 

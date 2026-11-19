@@ -8,7 +8,10 @@ Every 5-minute bar close:
   2. run every hunter on the latest closed bar;
   3. shadow-only hunters (the control) go straight to the shadow ledger;
   4. every live candidate goes to ONE LLM call that approves / halves /
-     vetoes each — funded or not, so the judge is measured on all of them;
+     vetoes each — funded or not, so the judge is measured on all of them.
+     Vetoes are only obeyed once they have proven to help (`judge_veto`
+     auto): until then a vetoed candidate is executed at half size and its
+     record keeps measuring what the veto would have saved;
   5. an approved candidate is executed only if the tournament allocator
      gives its hunter capital (risk scale > 0, earned by the forward record
      of the judge's approved picks; NO-GO in replay → none until then) and
@@ -35,11 +38,11 @@ import pandas as pd
 from backend.agent import guardrails
 from backend.agent.paper_execution import ROUND_TRIP_COST, AgentTrade, PaperBroker
 from backend.agent.tools import build_tool_dispatch
-from backend.allocator.thompson import AllocatorConfig, allocate
+from backend.allocator.thompson import AllocatorConfig, allocate, cluster_events
 from backend.hunters.base import Candidate, Hunter, ScanContext
 from backend.hunters.features import prepare
 from backend.hunters.judge import run_judge
-from backend.hunters.shadow import TAKEN, ShadowBook
+from backend.hunters.shadow import TAKEN, ShadowBook, shadow_stats
 from backend.hunters.strategies import default_hunters
 
 logger = logging.getLogger(__name__)
@@ -77,6 +80,13 @@ class HunterConfig:
     alloc_min_trades: int = 30
     alloc_explore_scale: float = 0.5
     alloc_demote_below: float = 0.5
+    alloc_cluster_min: int = 60             # same hunter+direction within 60 min = one event
+    alloc_full_risk_events: int = 60
+    alloc_full_risk_days: float = 14.0
+    # judge vetoes: "on" obey, "off" ignore (execute at half size), "auto" obey
+    # only once the record shows they help (see _veto_record_helps)
+    judge_veto: str = "auto"
+    veto_min_n: int = 20
 
 
 @dataclass
@@ -118,6 +128,7 @@ class HunterEngine:
         self.replay_verdicts: Dict[str, str] = {}
         self.lessons: List[str] = []                   # student lessons for the judge prompt
         self._closed_shadow: List[dict] = []           # in-memory evidence when there's no repo
+        self.vetoes_enabled = config.judge_veto == "on"
 
     # ── read helpers ─────────────────────────────────────────────────────
     @property
@@ -145,22 +156,59 @@ class HunterEngine:
         return n
 
     # ── tournament ───────────────────────────────────────────────────────
-    def _evidence(self) -> Dict[str, List[float]]:
-        """R of every closed shadow candidate the JUDGE APPROVED, per hunter —
-        executed or not. What trades live is "hunter filtered by the judge",
-        so that is what earns capital (a raw-negative hunter can still earn
-        it if the judge's picks are positive)."""
+    def _closed_rows(self) -> List[dict]:
         rows = self._closed_shadow
         if self.shadow_repo:
             try:
                 rows = self.shadow_repo.get_closed()
             except Exception as exc:
                 logger.warning(f"allocator: shadow read failed: {exc}")
-        out: Dict[str, List[float]] = {}
+        return rows
+
+    def _evidence_decisions(self) -> tuple:
+        """What actually trades live: the judge's approvals — plus its vetoes
+        while vetoes are ignored (they are executed at half size then)."""
+        return TAKEN if self.vetoes_enabled else TAKEN + ("vetoed",)
+
+    def _evidence(self, rows: Optional[List[dict]] = None):
+        """Per hunter: R per EVENT of every closed shadow candidate that trades
+        live (see _evidence_decisions), executed or not, plus the raw trade
+        count and the days the evidence spans. What trades live is "hunter
+        filtered by the judge", so that is what earns capital (a raw-negative
+        hunter can still earn it if the judge's picks are positive)."""
+        rows = self._closed_rows() if rows is None else rows
+        decisions = self._evidence_decisions()
+        by_hunter: Dict[str, List[dict]] = {}
         for r in rows:
-            if r.get("r_multiple") is not None and r.get("decision") in TAKEN:
-                out.setdefault(r["hunter"], []).append(float(r["r_multiple"]))
-        return out
+            if r.get("r_multiple") is not None and r.get("decision") in decisions:
+                by_hunter.setdefault(r["hunter"], []).append(r)
+        window = self.config.alloc_cluster_min * 60 * 1000
+        events = {h: cluster_events(rs, window) for h, rs in by_hunter.items()}
+        info = {}
+        for h, rs in by_hunter.items():
+            ts = [r["created_at"] for r in rs if r.get("created_at") is not None]
+            info[h] = {"trades": len(rs),
+                       "span_days": (max(ts) - min(ts)) / 86_400_000 if ts else 0.0}
+        return events, info
+
+    def _veto_record_helps(self, rows: List[dict]) -> bool:
+        """Vetoes earn back their authority with >= veto_min_n closed vetoed
+        candidates that lost on average AND a positive judge value-add."""
+        judge = shadow_stats(rows)["judge"]
+        vetoed = judge["vetoed"]
+        return (vetoed["n"] >= self.config.veto_min_n and vetoed["mean_r"] is not None
+                and vetoed["mean_r"] < 0 and (judge["value_add_r"] or 0) > 0)
+
+    def _refresh_vetoes(self, rows: List[dict]) -> Optional[str]:
+        mode = self.config.judge_veto
+        new = True if mode == "on" else False if mode == "off" else self._veto_record_helps(rows)
+        if new == self.vetoes_enabled:
+            return None
+        self.vetoes_enabled = new
+        j = shadow_stats(rows)["judge"]
+        return (f"judge vetoes {'ENABLED' if new else 'DISABLED'} (mode {mode}): "
+                f"{j['vetoed']['n']} closed vetoed, mean {j['vetoed']['mean_r']}R, "
+                f"value-add {j['value_add_r']}R")
 
     def set_replay_verdicts(self, report: Optional[dict]):
         """{hunter: GO / NO-GO / INSUFFICIENT} from a replay report: a seeded
@@ -174,20 +222,30 @@ class HunterEngine:
         closed shadow trades. Status changes are announced via `notifier`."""
         cfg = AllocatorConfig(min_trades=self.config.alloc_min_trades,
                               explore_scale=self.config.alloc_explore_scale,
-                              demote_below=self.config.alloc_demote_below)
+                              demote_below=self.config.alloc_demote_below,
+                              full_risk_min_events=self.config.alloc_full_risk_events,
+                              full_risk_min_days=self.config.alloc_full_risk_days,
+                              capped_scale=self.config.alloc_explore_scale)
+        rows = self._closed_rows()
+        veto_change = self._refresh_vetoes(rows)
+        events, info = self._evidence(rows)
         meta = {h.name: {"live": h.live, "variant": h.parent is not None,
-                         "replay": self.replay_verdicts.get(h.name)} for h in self.hunters}
-        new = allocate(self._evidence(), meta, cfg)
+                         "replay": self.replay_verdicts.get(h.name), **info.get(h.name, {})}
+                for h in self.hunters}
+        new = allocate(events, meta, cfg)
         changes = [(name, self.allocation[name]["status"], row)
                    for name, row in new.items()
                    if name in self.allocation and self.allocation[name]["status"] != row["status"]]
         self.allocation = new
-        if notify and changes and self.notifier:
-            lines = [f"{name}: {old} -> {row['status']} (n={row['n']}, mean {row['mean_r']}R, "
-                     f"P(edge>0)={row['p_positive']}, risk scale {row['risk_scale']})"
+        if notify and (changes or veto_change) and self.notifier:
+            lines = [f"{name}: {old} -> {row['status']} (n={row['n']} events / {row['trades']} trades, "
+                     f"mean {row['mean_r']}R, P(edge>0)={row['p_positive']}, "
+                     f"risk scale {row['risk_scale']}{' capped' if row.get('capped') else ''})"
                      for name, old, row in changes]
+            if veto_change:
+                lines.append(veto_change)
             try:
-                self.notifier(f"[hunters] tournament: {len(changes)} status change(s)",
+                self.notifier(f"[hunters] tournament: {len(changes) + bool(veto_change)} change(s)",
                               "\n".join(lines))
             except Exception as exc:
                 logger.warning(f"allocator notice failed: {exc}")
@@ -333,9 +391,12 @@ class HunterEngine:
             decision, rationale = verdicts[c.id]
             price = prices.get(c.symbol, c.ref_price)
             trade_id = None
-            if decision in TAKEN:
+            vetoed_ignored = decision == "vetoed" and not self.vetoes_enabled
+            if vetoed_ignored:
+                rationale = f"[veto ignored: vetoes disabled] {rationale}"
+            if decision in TAKEN or vetoed_ignored:
                 scale = scales.get(c.hunter, 0.0)
-                payload = self._sized_payload(c, scale * (0.5 if decision == "reduced" else 1.0))
+                payload = self._sized_payload(c, scale * (1.0 if decision == "approved" else 0.5))
                 if scale <= 0:
                     st = self.allocation.get(c.hunter, {}).get("status", "unallocated")
                     rationale = f"[not executed: no tournament capital ({st})] {rationale}"
@@ -477,5 +538,6 @@ class HunterEngine:
             "hunters": [{"name": h.name, "version": h.version, "live": h.live, "parent": h.parent,
                          "tournament": self.allocation.get(h.name)} for h in self.hunters],
             "lessons": self.lessons,
+            "vetoes_enabled": self.vetoes_enabled, "judge_veto_mode": self.config.judge_veto,
             "universe": self.config.universe,
         }

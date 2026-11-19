@@ -197,12 +197,12 @@ class TestJudge:
         llm = _llm_submitting([{"candidate_id": a.id, "decision": "approve", "rationale": "ok"},
                                {"candidate_id": "made-up", "decision": "approve", "rationale": "x"}])
         v, _ = run_judge(llm, [a, b], {})
-        assert v[b.id][0] == "vetoed" and set(v) == {a.id, b.id}
+        assert v[b.id][0] == "failed" and set(v) == {a.id, b.id}
 
     def test_llm_error_vetoes_everything(self):
         a = _cand()
         v, _ = run_judge(_llm_submitting(error="timeout"), [a], {})
-        assert v[a.id][0] == "vetoed" and "timeout" in v[a.id][1]
+        assert v[a.id][0] == "failed" and "timeout" in v[a.id][1]
 
 
 class FakeBarsExchange:
@@ -253,7 +253,7 @@ class TestHunterEngine:
         hunters = [FixedHunter("ctrl", ["BTC/USDT"], live=False),
                    FixedHunter("live_a", ["BTC/USDT", "ETH/USDT"])]
         llm = _llm_submitting()
-        eng = _engine(hunters, llm)
+        eng = _engine(hunters, llm, judge_veto="on")
 
         def judge_all(messages, tools, dispatch, max_tool_turns=6):
             cands = json.loads(messages[1]["content"].split("\n", 1)[1])

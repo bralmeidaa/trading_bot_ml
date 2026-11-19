@@ -4,7 +4,9 @@ the stop/target go; the LLM only approves, halves (reduce) or vetoes, using
 what the rules can't see: news, the wider market, the book's exposure.
 
 One LLM call per batch of candidates. The verdicts must come back through the
-`submit_verdicts` tool; anything missing or malformed is a veto (fail closed).
+`submit_verdicts` tool; anything missing or malformed is "failed" (fail
+closed: never executed). A failure is kept apart from a real veto so it
+doesn't pollute the measurement of the judge's vetoes.
 """
 from __future__ import annotations
 
@@ -90,7 +92,7 @@ def run_judge(llm_client, candidates: List[Candidate],
               max_tool_turns: int = 6,
               lessons: List[str] = None) -> Tuple[Dict[str, Tuple[str, str]], object]:
     """Returns ({candidate_id: (decision, rationale)}, ChatResult). Every
-    candidate gets a verdict; failures become ('vetoed', reason)."""
+    candidate gets a verdict; failures become ('failed', reason)."""
     submitted: Dict[str, Tuple[str, str]] = {}
     ids = {c.id for c in candidates}
 
@@ -109,5 +111,5 @@ def run_judge(llm_client, candidates: List[Candidate],
     ]
     result = llm_client.chat_with_tools(messages, judge_tools(), dispatch, max_tool_turns=max_tool_turns)
     reason = f"judge error: {result.error}" if result.error else "no verdict returned by judge"
-    verdicts = {cid: submitted.get(cid, ("vetoed", reason)) for cid in ids}
+    verdicts = {cid: submitted.get(cid, ("failed", reason)) for cid in ids}
     return verdicts, result

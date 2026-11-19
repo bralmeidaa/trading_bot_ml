@@ -192,7 +192,7 @@ class TestAllocator:
 
     def test_status_rules(self):
         meta = {"seeded_new": {"live": True}, "variant_new": {"live": True, "variant": True},
-                "ctrl": {"live": False}, "loser": {"live": True}, "winner": {"live": True}}
+                "ctrl": {"live": False}, "loser": {"live": True}, "winner": {"live": True, "span_days": 20}}
         evid = {"seeded_new": [1.0] * 5, "variant_new": [1.0] * 5, "ctrl": [2.0] * 50,
                 "loser": [-0.5, 0.2] * 20, "winner": [0.8, -0.4] * 20}
         a = allocate(evid, meta, AllocatorConfig(explore_scale=0.5))
@@ -226,7 +226,8 @@ class TestEngineTournament:
         assert eng.broker.open_trades == {}
 
     def test_replay_no_go_removes_exploration_capital(self):
-        eng = self._engine([FixedHunter("a", ["BTC/USDT"]), FixedHunter("b", ["BTC/USDT"])])
+        eng = self._engine([FixedHunter("a", ["BTC/USDT"]), FixedHunter("b", ["BTC/USDT"])],
+                           judge_veto="on")
         eng.set_replay_verdicts({"report": {"a": {"verdict": "NO-GO"}, "b": {"verdict": "GO"}}})
         assert eng.allocation["a"]["risk_scale"] == 0.0 and eng.allocation["a"]["replay"] == "NO-GO"
         assert eng.allocation["b"]["risk_scale"] == eng.config.alloc_explore_scale

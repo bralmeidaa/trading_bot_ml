@@ -353,6 +353,17 @@ hunter_engine = None         # type: ignore
 hunter_task: Optional[asyncio.Task] = None
 
 
+def _apply_hunter_env(cfg):
+    """Tournament / judge knobs from the environment (docker-compose)."""
+    cfg.alloc_explore_scale = float(os.getenv("HUNTER_EXPLORE_SCALE", str(cfg.alloc_explore_scale)))
+    cfg.alloc_cluster_min = int(os.getenv("HUNTER_CLUSTER_MIN", str(cfg.alloc_cluster_min)))
+    cfg.alloc_full_risk_events = int(os.getenv("HUNTER_FULL_RISK_EVENTS", str(cfg.alloc_full_risk_events)))
+    cfg.alloc_full_risk_days = float(os.getenv("HUNTER_FULL_RISK_DAYS", str(cfg.alloc_full_risk_days)))
+    veto = os.getenv("HUNTER_JUDGE_VETO", cfg.judge_veto).strip().lower()
+    cfg.judge_veto = veto if veto in ("auto", "on", "off") else "auto"
+    return cfg
+
+
 @app.post("/api/hunters/start", tags=["Hunters"], summary="Start the hunters + LLM judge engine")
 async def start_hunters():
     global hunter_engine, hunter_task
@@ -376,7 +387,7 @@ async def start_hunters():
         exchange = await asyncio.to_thread(lambda: ccxt.binance({"enableRateLimit": True}))
         stream = stream_service if (stream_task and not stream_task.done()) else None
         from backend.alerts.notice import email_notice
-        cfg.alloc_explore_scale = float(os.getenv("HUNTER_EXPLORE_SCALE", str(cfg.alloc_explore_scale)))
+        _apply_hunter_env(cfg)
         hunter_engine = HunterEngine(cfg, exchange, AgentLLMClient(llm_cfg),
                                      trade_repo=TradeRepository(),
                                      shadow_repo=ShadowTradeRepository(), stream=stream,
@@ -489,13 +500,22 @@ async def get_tournament():
     else:
         from backend.hunters.engine import HunterConfig, HunterEngine
         from backend.persistence.repository import ShadowTradeRepository
-        allocation = HunterEngine(HunterConfig(), None, None,
+        allocation = HunterEngine(_apply_hunter_env(HunterConfig()), None, None,
                                   shadow_repo=ShadowTradeRepository()).refresh_allocation(notify=False)
+    from backend.hunters.engine import HunterConfig
+    cfg = hunter_engine.config if hunter_engine is not None else _apply_hunter_env(HunterConfig())
     agent = trade_stats(TradeRepository().get_closed_trades(os.getenv("AGENT_BOT_ID", "ai_agent_v2")))
     return ok({
         "strategies": allocation, "cash_weight": cash_weight(allocation),
-        "rules": {"min_trades": 30, "explore_scale": float(os.getenv("HUNTER_EXPLORE_SCALE", "0.5")),
-                  "demote_below_p_positive": 0.5},
+        "rules": {"min_events": cfg.alloc_min_trades, "explore_scale": cfg.alloc_explore_scale,
+                  "demote_below_p_positive": cfg.alloc_demote_below,
+                  "event_window_min": cfg.alloc_cluster_min,
+                  "full_risk_after": {"events": cfg.alloc_full_risk_events,
+                                      "or_days": cfg.alloc_full_risk_days,
+                                      "until_then_max_scale": cfg.alloc_explore_scale},
+                  "judge_veto_mode": cfg.judge_veto,
+                  "vetoes_enabled": (hunter_engine.vetoes_enabled if hunter_engine is not None
+                                     else None)},
         # the free-form LLM agent trades its own book; shown for comparison only
         "llm_discretionary": {"n": agent.get("n"), "expectancy_r": agent.get("expectancy_r"),
                               "net_pnl": agent.get("net_pnl"), "win_rate": agent.get("win_rate")},

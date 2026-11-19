@@ -343,12 +343,27 @@ ao vivo vai ao juiz LLM (aprova / reduz / veta) → executa só se o torneio dá
 capital ao caçador e os portões do livro deixam → tudo segue no histórico sombra.
 
 ### `GET /api/tournament`
-`strategies[nome]`: `n`, `mean_r`, `p_positive`, `status`
-(`control` / `warming` / `active` / `demoted`), `weight` (Thompson) e
-`risk_scale` (0 = não executa). A evidência é o R **das propostas que o juiz
-aprovou** no sombra (executadas ou não). `warming` (< 30 aprovações fechadas):
-caçador semeado opera a `HUNTER_EXPLORE_SCALE` salvo se o replay deu NO-GO;
-variante do estudante, zero. `llm_discretionary` = agente livre, só comparação.
+`strategies[nome]`: `n` (em **eventos**), `trades` (operações brutas),
+`mean_r`, `p_positive`, `status` (`control` / `warming` / `active` /
+`demoted`), `weight` (Thompson), `risk_scale` (0 = não executa) e `capped`.
+A evidência é o R **do que opera ao vivo** no sombra (executado ou não): as
+aprovações do juiz, mais os vetos enquanto os vetos estão desligados.
+Propostas do mesmo caçador na mesma direção dentro de `HUNTER_CLUSTER_MIN`
+(60) minutos contam como **um** evento, com o R médio delas: uma cascata em 5
+pares é uma aposta só. `warming` (< 30 eventos fechados): caçador semeado
+opera a `HUNTER_EXPLORE_SCALE` salvo se o replay deu NO-GO; variante do
+estudante, zero. `active` fica limitado a `HUNTER_EXPLORE_SCALE`
+(`capped=true`) até `HUNTER_FULL_RISK_EVENTS` (60) eventos ou
+`HUNTER_FULL_RISK_DAYS` (14) dias de histórico. `rules` mostra os valores
+efetivos e `vetoes_enabled`. `llm_discretionary` = agente livre, só
+comparação.
+
+Vetos do juiz (`HUNTER_JUDGE_VETO`): `auto` (padrão) ignora os vetos (executa
+com meio tamanho, grava `vetoed` com o prefixo `[veto ignored: ...]`) até
+haver ≥ 20 vetadas fechadas com R médio < 0 e valor do juiz > 0; recalculado
+na virada do dia, com email a cada mudança. `on` obedece sempre, `off`
+nunca. Falha do juiz (erro do LLM ou veredito faltando) é gravada como
+`failed`, nunca executa e não entra na precisão do veto.
 
 ### `POST /api/replay/run?days=120&symbols=`
 Replay em background (um par por vez; ~10-20 min p/ 120d×15 pares na VM).
